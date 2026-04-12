@@ -684,19 +684,27 @@ export class RepositorySourceControlManager {
       }
     }
 
-    const parentShowPromises = status.parentChanges.map(
-      async (parentChange) => {
-        const showResult = await this.repository.show(parentChange.changeId);
-        return { changeId: parentChange.changeId, showResult };
-      },
+    const config = vscode.workspace.getConfiguration(
+      "jjk",
+      vscode.Uri.file(this.repositoryRoot),
     );
+    const showParentCommit = config.get<boolean>("showParentCommit") ?? true;
 
-    const parentShowResultsArray = await Promise.all(parentShowPromises);
+    if (showParentCommit) {
+      const parentShowPromises = status.parentChanges.map(
+        async (parentChange) => {
+          const showResult = await this.repository.show(parentChange.changeId);
+          return { changeId: parentChange.changeId, showResult };
+        },
+      );
 
-    for (const { changeId, showResult } of parentShowResultsArray) {
-      newParentShowResults.set(changeId, showResult);
-      newFileStatusesByChange.set(changeId, showResult.fileStatuses);
-      newConflictedFilesByChange.set(changeId, showResult.conflictedFiles);
+      const parentShowResultsArray = await Promise.all(parentShowPromises);
+
+      for (const { changeId, showResult } of parentShowResultsArray) {
+        newParentShowResults.set(changeId, showResult);
+        newFileStatusesByChange.set(changeId, showResult.fileStatuses);
+        newConflictedFilesByChange.set(changeId, showResult.conflictedFiles);
+      }
     }
 
     this.status = status;
@@ -747,9 +755,33 @@ export class RepositorySourceControlManager {
     );
     this.sourceControl.count = this.status.fileStatuses.length;
 
+    this.renderParentCommits(this.status);
+
+    this.decorationProvider.onRefresh(
+      this.repositoryRoot,
+      this.fileStatusesByChange,
+      this.trackedFiles,
+      this.conflictedFilesByChange,
+    );
+  }
+
+  private renderParentCommits(status: RepositoryStatus) {
+    const config = vscode.workspace.getConfiguration(
+      "jjk",
+      vscode.Uri.file(this.repositoryRoot),
+    );
+
+    if (!config.get<boolean>("showParentCommit", true)) {
+      for (const group of this.parentResourceGroups) {
+        group.dispose();
+      }
+      this.parentResourceGroups = [];
+      return;
+    }
+
     const updatedGroups: vscode.SourceControlResourceGroup[] = [];
     for (const group of this.parentResourceGroups) {
-      const parentChange = this.status.parentChanges.find(
+      const parentChange = status.parentChanges.find(
         (change) => change.changeId === group.id,
       );
       if (!parentChange) {
@@ -764,7 +796,7 @@ export class RepositorySourceControlManager {
     }
     this.parentResourceGroups = updatedGroups;
 
-    for (const parentChange of this.status.parentChanges) {
+    for (const parentChange of this.status!.parentChanges) {
       let parentChangeResourceGroup!: vscode.SourceControlResourceGroup;
 
       const parentGroup = this.parentResourceGroups.find(
@@ -785,8 +817,8 @@ export class RepositorySourceControlManager {
 
       const showResult = this.parentShowResults.get(parentChange.changeId);
       if (showResult) {
-        parentChangeResourceGroup.resourceStates = showResult.fileStatuses.map(
-          (parentStatus) => {
+        parentChangeResourceGroup.resourceStates =
+          showResult.fileStatuses.map((parentStatus) => {
             return {
               resourceUri: toJJUri(vscode.Uri.file(parentStatus.path), {
                 rev: parentChange.changeId,
@@ -806,17 +838,9 @@ export class RepositorySourceControlManager {
                 `(${parentChange.changeId})`,
               ),
             };
-          },
-        );
+          });
       }
     }
-
-    this.decorationProvider.onRefresh(
-      this.repositoryRoot,
-      this.fileStatusesByChange,
-      this.trackedFiles,
-      this.conflictedFilesByChange,
-    );
   }
 
   dispose() {
