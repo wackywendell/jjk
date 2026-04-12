@@ -1780,6 +1780,11 @@ export async function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  // Stub: full QuickPick implementation added in a later commit
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.changeBaseRevision", () => {}),
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "jj.openFolderGitSettings",
