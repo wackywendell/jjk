@@ -399,7 +399,7 @@
       "scm/resourceGroup/context": [
         {
           "command": "jj.describe",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^(@|[a-z]+)$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds",
           "group": "inline"
         },
         {
@@ -409,22 +409,22 @@
         },
         {
           "command": "jj.squashToWorkingCopyResourceGroup",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^[a-z]+$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds && scmResourceGroup != @",
           "group": "inline"
         },
         {
           "command": "jj.restoreResourceGroup",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^(@|[a-z]+)$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds",
           "group": "inline"
         },
         {
           "command": "jj.editResourceGroup",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^[a-z]+$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds && scmResourceGroup != @",
           "group": "inline"
         },
         {
           "command": "jj.changeBaseRevision",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^base-comparison-/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds",
           "group": "inline"
         }
       ],
@@ -436,7 +436,7 @@
         },
         {
           "command": "jj.restoreResourceState",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^(@|[a-z]+)$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds",
           "group": "inline"
         },
         {
@@ -451,14 +451,14 @@
         },
         {
           "command": "jj.squashToWorkingCopyResourceState",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^[a-z]+$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds && scmResourceGroup != @",
           "group": "inline"
         }
       ],
       "scm/resourceFolder/context": [
         {
           "command": "jj.restoreResourceState",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^(@|[a-z]+)$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds",
           "group": "inline"
         },
         {
@@ -468,7 +468,7 @@
         },
         {
           "command": "jj.squashToWorkingCopyResourceState",
-          "when": "scmProvider == jj && scmResourceGroup =~ /^[a-z]+$/",
+          "when": "scmProvider == jj && scmResourceGroup in jj.commitGroupIds && scmResourceGroup != @",
           "group": "inline"
         }
       ],
