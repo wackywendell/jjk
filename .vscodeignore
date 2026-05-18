@@ -15,4 +15,8 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 .jj
+.claude/**
+.local/**
+.tmp/**
+workspaces/**
 *.vsix

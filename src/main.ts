@@ -7,6 +7,7 @@ import {
   WorkspaceSourceControlManager,
 } from "./repository";
 import type {
+  BaseComparisonMode,
   JJRepository,
   ChangeWithDetails,
   FileStatus,
@@ -128,6 +129,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     if (
       e.affectsConfiguration("jjk.baseRevision") ||
+      e.affectsConfiguration("jjk.baseComparisonMode") ||
       e.affectsConfiguration("jjk.showBaseComparison") ||
       e.affectsConfiguration("jjk.showParentCommit")
     ) {
@@ -176,6 +178,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
       workspaceSCM.onDidRepoUpdate(({ repoSCM }) => {
+        updateScmGroupContextKeys();
         if (
           operationLogManager.operationLogTreeDataProvider.getSelectedRepo()
             .repositoryRoot === repoSCM.repositoryRoot
@@ -1828,60 +1831,152 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("jj.changeBaseRevision", async () => {
       const repository = getSelectedRepo();
-
       const config = vscode.workspace.getConfiguration(
         "jjk",
         vscode.Uri.file(repository.repositoryRoot),
       );
-      const showParentCommit = config.get<boolean>("showParentCommit") ?? true;
-
-      const items: vscode.QuickPickItem[] = [
-        { label: "trunk()", description: "Default: main branch" },
-      ];
-      // Only show @- when parent commit groups are hidden,
-      // since otherwise the parent is already visible in the SCM view
-      if (!showParentCommit) {
-        items.push({ label: "@-", description: "Parent commit" });
-      }
-
-      // Fetch bookmarks between the
-      const bookmarks = await repository.bookmarksOfAncestors();
-      for (const b of bookmarks) {
-        items.push({ label: b, description: "bookmark" });
-      }
-
-      items.push({
-        label: "$(edit) Custom revset...",
-        description: "Enter any revset expression",
-      });
-
-      const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: "Select base revision",
-      });
-      if (!selected) {
-        return;
-      }
-
-      let value = selected.label;
-      if (value === "$(edit) Custom revset...") {
-        const currentBase = config.get<string>("baseRevision") ?? "trunk()";
-        const custom = await vscode.window.showInputBox({
-          prompt: "Enter a jj revset expression for the base revision",
-          value: currentBase,
-          placeHolder: "trunk()",
-        });
-        if (custom === undefined) {
-          return;
-        }
-        value = custom;
-      }
-
-      await config.update(
-        "baseRevision",
-        value,
-        vscode.ConfigurationTarget.Workspace,
-      );
+      await updateBaseRevision(repository, config);
     }),
+  );
+
+  async function updateBaseRevision(
+    repository: JJRepository,
+    config: vscode.WorkspaceConfiguration,
+  ) {
+    const showParentCommit = config.get<boolean>("showParentCommit") ?? true;
+    const baseComparisonMode =
+      config.get<string>("baseComparisonMode") ?? "stack";
+
+    const items: vscode.QuickPickItem[] = [
+      { label: "trunk()", description: "Default: main branch" },
+    ];
+    // In split-stack mode, @-- is only useful when parent commit groups are
+    // hidden. In cumulative mode, it means "show this stack through @."
+    if (!showParentCommit || baseComparisonMode === "workingCopy") {
+      items.push({
+        label: "@--",
+        description:
+          baseComparisonMode === "workingCopy"
+            ? "Current stack base"
+            : "Parent commit changes",
+      });
+    }
+
+    const bookmarks = await repository.bookmarksOfAncestors();
+    for (const b of bookmarks) {
+      items.push({ label: b, description: "bookmark" });
+    }
+
+    items.push({
+      label: "$(edit) Custom revset...",
+      description: "Enter any revset expression",
+    });
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: "Select base revision",
+    });
+    if (!selected) {
+      return false;
+    }
+
+    let value = selected.label;
+    if (value === "$(edit) Custom revset...") {
+      const currentBase = config.get<string>("baseRevision") ?? "trunk()";
+      const custom = await vscode.window.showInputBox({
+        prompt: "Enter a jj revset expression for the base revision",
+        value: currentBase,
+        placeHolder: "trunk()",
+      });
+      if (custom === undefined) {
+        return false;
+      }
+      value = custom;
+    }
+
+    await config.update(
+      "baseRevision",
+      value,
+      vscode.ConfigurationTarget.Workspace,
+    );
+    return true;
+  }
+
+  async function updateBaseComparisonModeValue(mode: BaseComparisonMode) {
+    const repository = getSelectedRepo();
+    const config = vscode.workspace.getConfiguration(
+      "jjk",
+      vscode.Uri.file(repository.repositoryRoot),
+    );
+    await config.update(
+      "baseComparisonMode",
+      mode,
+      vscode.ConfigurationTarget.Workspace,
+    );
+  }
+
+  async function updateShowParentCommit(showParentCommit: boolean) {
+    const repository = getSelectedRepo();
+    const config = vscode.workspace.getConfiguration(
+      "jjk",
+      vscode.Uri.file(repository.repositoryRoot),
+    );
+    await config.update(
+      "showParentCommit",
+      showParentCommit,
+      vscode.ConfigurationTarget.Workspace,
+    );
+  }
+
+  async function updateShowBaseComparison(showBaseComparison: boolean) {
+    const repository = getSelectedRepo();
+    const config = vscode.workspace.getConfiguration(
+      "jjk",
+      vscode.Uri.file(repository.repositoryRoot),
+    );
+    await config.update(
+      "showBaseComparison",
+      showBaseComparison,
+      vscode.ConfigurationTarget.Workspace,
+    );
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.showParentCommit", async () => {
+      await updateShowParentCommit(true);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.hideParentCommit", async () => {
+      await updateShowParentCommit(false);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.showBaseComparison", async () => {
+      await updateShowBaseComparison(true);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.hideBaseComparison", async () => {
+      await updateShowBaseComparison(false);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("jj.useStackBaseComparison", async () => {
+      await updateBaseComparisonModeValue("stack");
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "jj.useCumulativeBaseComparison",
+      async () => {
+        await updateBaseComparisonModeValue("workingCopy");
+      },
+    ),
   );
 
   context.subscriptions.push(

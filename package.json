@@ -258,6 +258,42 @@
         "title": "Change base revision",
         "category": "Jujutsu",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "jj.showParentCommit",
+        "title": "Show Parent Commit Section",
+        "category": "Jujutsu",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "jj.hideParentCommit",
+        "title": "Hide Parent Commit Section",
+        "category": "Jujutsu",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "jj.showBaseComparison",
+        "title": "Show Base Comparison Section",
+        "category": "Jujutsu",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "jj.hideBaseComparison",
+        "title": "Hide Base Comparison Section",
+        "category": "Jujutsu",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "jj.useStackBaseComparison",
+        "title": "Use Stack Mode",
+        "category": "Jujutsu",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "jj.useCumulativeBaseComparison",
+        "title": "Use Cumulative Mode",
+        "category": "Jujutsu",
+        "icon": "$(diff)"
       }
     ],
     "menus": {
@@ -391,9 +427,39 @@
           "group": "navigation"
         },
         {
-          "command": "jj.changeBaseRevision",
+          "command": "jj.hideParentCommit",
+          "when": "scmProvider == jj && config.jjk.showParentCommit",
+          "group": "changesView@1"
+        },
+        {
+          "command": "jj.showParentCommit",
+          "when": "scmProvider == jj && !config.jjk.showParentCommit",
+          "group": "changesView@1"
+        },
+        {
+          "command": "jj.hideBaseComparison",
           "when": "scmProvider == jj && config.jjk.showBaseComparison",
-          "group": "navigation"
+          "group": "changesView@2"
+        },
+        {
+          "command": "jj.showBaseComparison",
+          "when": "scmProvider == jj && !config.jjk.showBaseComparison",
+          "group": "changesView@2"
+        },
+        {
+          "command": "jj.changeBaseRevision",
+          "when": "scmProvider == jj",
+          "group": "changesView@3"
+        },
+        {
+          "command": "jj.useCumulativeBaseComparison",
+          "when": "scmProvider == jj && config.jjk.baseComparisonMode == stack",
+          "group": "changesView@4"
+        },
+        {
+          "command": "jj.useStackBaseComparison",
+          "when": "scmProvider == jj && config.jjk.baseComparisonMode == workingCopy",
+          "group": "changesView@4"
         }
       ],
       "scm/resourceGroup/context": [
@@ -426,6 +492,21 @@
           "command": "jj.changeBaseRevision",
           "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds",
           "group": "inline"
+        },
+        {
+          "command": "jj.hideBaseComparison",
+          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds",
+          "group": "changesView@1"
+        },
+        {
+          "command": "jj.useCumulativeBaseComparison",
+          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds && config.jjk.baseComparisonMode == stack",
+          "group": "changesView@2"
+        },
+        {
+          "command": "jj.useStackBaseComparison",
+          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds && config.jjk.baseComparisonMode == workingCopy",
+          "group": "changesView@2"
         }
       ],
       "scm/resourceState/context": [
@@ -491,6 +572,34 @@
         },
         {
           "command": "jj.openFileInWorkingCopyResourceState",
+          "when": "false"
+        },
+        {
+          "command": "jj.changeBaseRevision",
+          "when": "false"
+        },
+        {
+          "command": "jj.showParentCommit",
+          "when": "false"
+        },
+        {
+          "command": "jj.hideParentCommit",
+          "when": "false"
+        },
+        {
+          "command": "jj.showBaseComparison",
+          "when": "false"
+        },
+        {
+          "command": "jj.hideBaseComparison",
+          "when": "false"
+        },
+        {
+          "command": "jj.useStackBaseComparison",
+          "when": "false"
+        },
+        {
+          "command": "jj.useCumulativeBaseComparison",
           "when": "false"
         },
         {
@@ -625,19 +734,33 @@
         "jjk.showParentCommit": {
           "type": "boolean",
           "default": true,
-          "description": "Whether to show Parent Commit resource groups in the SCM sidebar.",
+          "description": "Whether to show Parent Commit sections in the Source Control view.",
           "scope": "resource"
         },
         "jjk.showBaseComparison": {
           "type": "boolean",
           "default": false,
-          "description": "Whether to show Base Comparison resource groups in the SCM sidebar. Shows cumulative changes from the base revision to the current branch position.",
+          "description": "Whether to show Base Comparison sections in the Source Control view. The comparison range is controlled by jjk.baseComparisonMode.",
           "scope": "resource"
         },
         "jjk.baseRevision": {
           "type": "string",
           "default": "trunk()",
-          "description": "Revset expression for the base of the comparison. Used by the Base Comparison resource group.",
+          "description": "Revset expression for the base of the comparison. Used by the Base Comparison section.",
+          "scope": "resource"
+        },
+        "jjk.baseComparisonMode": {
+          "type": "string",
+          "enum": [
+            "stack",
+            "workingCopy"
+          ],
+          "enumDescriptions": [
+            "Show only the portion not already represented by visible parent and working-copy groups.",
+            "Show cumulative changes from the base revision through @, with the modified side opened from the editable working tree."
+          ],
+          "default": "stack",
+          "description": "How the Base Comparison section chooses its comparison target.",
           "scope": "resource"
         }
       }

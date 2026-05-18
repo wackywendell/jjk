@@ -556,14 +556,35 @@ export function provideOriginalResource(uri: vscode.Uri) {
 }
 
 type BaseComparisonResult =
-  | { kind: "ok"; fileStatuses: FileStatus[]; toRevision: string }
-  | { kind: "error"; toRevision: string; error: string };
+  | {
+      kind: "ok";
+      fileStatuses: FileStatus[];
+      view: BaseComparisonView;
+    }
+  | { kind: "error"; view: BaseComparisonView; error: string };
+
+export type BaseComparisonMode = "stack" | "workingCopy";
+
+export type BaseComparisonView =
+  | {
+      kind: "stack";
+      baseRevision: string;
+      toRevision: string;
+      decorationRev: string;
+    }
+  | {
+      kind: "workingCopy";
+      baseRevision: string;
+      toRevision: "@";
+      decorationRev: "base-comparison";
+    };
 
 /** Settings that affect both data fetching and rendering, read once per cycle. */
 type RefreshConfig = {
   showParentCommit: boolean;
   showBaseComparison: boolean;
   baseRevision: string;
+  baseComparisonMode: BaseComparisonMode;
 };
 
 /**
@@ -578,6 +599,81 @@ type RepoSnapshot = {
   baseComparisonResult: BaseComparisonResult | undefined;
   trackedFiles: Set<string>;
 };
+
+function parseBaseComparisonMode(value: string | undefined): BaseComparisonMode {
+  return value === "workingCopy" ? "workingCopy" : "stack";
+}
+
+export function createBaseComparisonView(
+  args:
+    | {
+        mode: "stack";
+        baseRevision: string;
+        toRevision: string;
+      }
+    | {
+        mode: "workingCopy";
+        baseRevision: string;
+      },
+): BaseComparisonView {
+  if (args.mode === "workingCopy") {
+    return {
+      kind: "workingCopy",
+      baseRevision: args.baseRevision,
+      toRevision: "@",
+      decorationRev: "base-comparison",
+    };
+  }
+
+  return {
+    kind: "stack",
+    baseRevision: args.baseRevision,
+    toRevision: args.toRevision,
+    decorationRev: args.toRevision,
+  };
+}
+
+export function getBaseComparisonLabel(
+  view: BaseComparisonView,
+  error?: string,
+) {
+  const label =
+    view.kind === "workingCopy"
+      ? `Changes from ${view.baseRevision} to @`
+      : `Stack changes since ${view.baseRevision}`;
+  return error ? `${label} (error: ${error})` : label;
+}
+
+export function toBaseComparisonResourceState(
+  fileStatus: FileStatus,
+  view: BaseComparisonView,
+): vscode.SourceControlResourceState {
+  const beforeUri = toJJUri(vscode.Uri.file(fileStatus.path), {
+    rev: view.baseRevision,
+  });
+  const afterUri =
+    view.kind === "workingCopy"
+      ? vscode.Uri.file(fileStatus.path)
+      : toJJUri(vscode.Uri.file(fileStatus.path), {
+          rev: view.toRevision,
+        });
+  const resourceUri =
+    view.kind === "workingCopy"
+      ? toJJUri(vscode.Uri.file(fileStatus.path), {
+          rev: view.decorationRev,
+        })
+      : afterUri;
+
+  return toResourceState(
+    fileStatus,
+    beforeUri,
+    afterUri,
+    view.kind === "workingCopy"
+      ? `(${view.baseRevision}..@)`
+      : `(${view.baseRevision})`,
+    resourceUri,
+  );
+}
 
 /**
  * Filters an array of resource groups, disposing those not in `validIds` and
@@ -750,6 +846,9 @@ export class RepositorySourceControlManager {
         showBaseComparison:
           vsConfig.get<boolean>("showBaseComparison") ?? false,
         baseRevision: vsConfig.get<string>("baseRevision") ?? "trunk()",
+        baseComparisonMode: parseBaseComparisonMode(
+          vsConfig.get<string>("baseComparisonMode"),
+        ),
       };
 
       this.snapshot = await this.buildSnapshot(status, config);
@@ -806,19 +905,39 @@ export class RepositorySourceControlManager {
     let baseComparisonResult: BaseComparisonResult | undefined;
 
     if (config.showBaseComparison) {
-      const toRevision = RepositorySourceControlManager.getBaseComparisonTarget(
-        status,
-        parentShowResults,
-        config.showParentCommit,
-      );
+      const view =
+        config.baseComparisonMode === "workingCopy"
+          ? createBaseComparisonView({
+              mode: "workingCopy",
+              baseRevision: config.baseRevision,
+            })
+          : (() => {
+              const toRevision =
+                RepositorySourceControlManager.getBaseComparisonTarget(
+                  status,
+                  parentShowResults,
+                  config.showParentCommit,
+                );
+              return toRevision === null
+                ? null
+                : createBaseComparisonView({
+                    mode: "stack",
+                    baseRevision: config.baseRevision,
+                    toRevision,
+                  });
+            })();
 
-      if (toRevision !== null) {
+      if (view) {
         try {
           const fileStatuses = await this.repository.diffSummary(
             config.baseRevision,
-            toRevision,
+            view.toRevision,
           );
-          baseComparisonResult = { kind: "ok", fileStatuses, toRevision };
+          baseComparisonResult = {
+            kind: "ok",
+            fileStatuses,
+            view,
+          };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           // Parse jj's "error: <detail>" stderr format; falls back to a
@@ -828,7 +947,7 @@ export class RepositorySourceControlManager {
             message.substring(0, 80);
           baseComparisonResult = {
             kind: "error",
-            toRevision,
+            view,
             error: shortMessage,
           };
           logger.warn(
@@ -839,12 +958,11 @@ export class RepositorySourceControlManager {
     }
 
     // Add base comparison file statuses to the map so the decoration provider
-    // can show A/M/D badges. The key is the toRevision (the revision used in
-    // the resourceUri), which matches how provideFileDecoration extracts the
-    // rev from jj:// URIs.
+    // can show A/M/D badges. Editable cumulative comparisons use a synthetic
+    // rev key so they don't overwrite normal working-copy decorations.
     if (baseComparisonResult?.kind === "ok") {
       fileStatusesByChange.set(
-        baseComparisonResult.toRevision,
+        baseComparisonResult.view.decorationRev,
         baseComparisonResult.fileStatuses,
       );
     }
@@ -876,6 +994,10 @@ export class RepositorySourceControlManager {
     }
 
     this.renderWorkingCopy(snapshot);
+    // VS Code displays SCM groups in creation order. If the base group already
+    // exists, recreate it before adding new parent groups so parents stay above
+    // the base comparison.
+    this.ensureBaseComparisonFollowsParentGroups(snapshot, config);
     this.renderParentGroups(snapshot, config);
     this.renderBaseComparisonGroup(snapshot, config);
 
@@ -903,6 +1025,36 @@ export class RepositorySourceControlManager {
         ),
       );
     this.sourceControl.count = snapshot.status.fileStatuses.length;
+  }
+
+  private ensureBaseComparisonFollowsParentGroups(
+    snapshot: RepoSnapshot,
+    config: RefreshConfig,
+  ) {
+    if (
+      !config.showBaseComparison ||
+      !snapshot.baseComparisonResult ||
+      !config.showParentCommit ||
+      this.baseComparisonGroups.length === 0
+    ) {
+      return;
+    }
+
+    const existingParentIds = new Set(
+      this.parentResourceGroups.map((group) => group.id),
+    );
+    const needsParentGroupCreation = snapshot.status.parentChanges.some(
+      (change) => !existingParentIds.has(change.changeId),
+    );
+
+    if (!needsParentGroupCreation) {
+      return;
+    }
+
+    for (const group of this.baseComparisonGroups) {
+      group.dispose();
+    }
+    this.baseComparisonGroups = [];
   }
 
   private renderParentGroups(snapshot: RepoSnapshot, config: RefreshConfig) {
@@ -982,22 +1134,13 @@ export class RepositorySourceControlManager {
     const result = snapshot.baseComparisonResult;
     switch (result.kind) {
       case "error":
-        group.label = `Changes since ${config.baseRevision} (error: ${result.error})`;
+        group.label = getBaseComparisonLabel(result.view, result.error);
         group.resourceStates = [];
         break;
       case "ok":
-        group.label = `Changes since ${config.baseRevision}`;
+        group.label = getBaseComparisonLabel(result.view);
         group.resourceStates = result.fileStatuses.map((fileStatus) =>
-          toResourceState(
-            fileStatus,
-            toJJUri(vscode.Uri.file(fileStatus.path), {
-              rev: config.baseRevision,
-            }),
-            toJJUri(vscode.Uri.file(fileStatus.path), {
-              rev: result.toRevision,
-            }),
-            `(${config.baseRevision})`,
-          ),
+          toBaseComparisonResourceState(fileStatus, result.view),
         );
         break;
     }
@@ -1021,9 +1164,10 @@ function toResourceState(
   beforeUri: vscode.Uri,
   afterUri: vscode.Uri,
   diffTitleSuffix: string,
+  resourceUri = afterUri,
 ): vscode.SourceControlResourceState {
   return {
-    resourceUri: afterUri,
+    resourceUri,
     decorations: {
       strikeThrough: fileStatus.type === "D",
       tooltip: path.basename(fileStatus.file),
