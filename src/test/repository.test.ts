@@ -1,7 +1,13 @@
 import * as assert from "assert";
 import * as path from "path";
+import * as vscode from "vscode";
 import { getExtensionAPI } from "./extensionApi";
-import type { FileStatus, RepositoryStatus, Show } from "../repository";
+import type {
+  BaseComparisonView,
+  FileStatus,
+  RepositoryStatus,
+  Show,
+} from "../repository";
 
 suite("parseRenamePaths", () => {
   let parseRenamePaths: (
@@ -307,5 +313,85 @@ suite("getBaseComparisonTarget", () => {
     const parentShowResults = new Map<string, Show>();
     const shown = getBaseComparisonTarget(status, parentShowResults, true);
     assert.strictEqual(null, shown);
+  });
+});
+
+suite("base comparison view", () => {
+  let createBaseComparisonView: typeof import("../repository").createBaseComparisonView;
+  let getBaseComparisonLabel: typeof import("../repository").getBaseComparisonLabel;
+  let toBaseComparisonResourceState: typeof import("../repository").toBaseComparisonResourceState;
+
+  suiteSetup(async () => {
+    ({
+      createBaseComparisonView,
+      getBaseComparisonLabel,
+      toBaseComparisonResourceState,
+    } = (await getExtensionAPI()).repository);
+  });
+
+  function makeFileStatus(): FileStatus {
+    return {
+      type: "M",
+      file: "src/file.ts",
+      path: path.join(path.sep, "repo", "src", "file.ts"),
+    };
+  }
+
+  function uriParams(uri: { query: string }) {
+    return JSON.parse(uri.query) as Record<string, string>;
+  }
+
+  test("stack mode uses jj revision resources", () => {
+    const view = createBaseComparisonView({
+      mode: "stack",
+      baseRevision: "trunk()",
+      toRevision: "parent",
+    });
+    const state = toBaseComparisonResourceState(makeFileStatus(), view);
+    const args = state.command?.arguments as
+      | [vscode.Uri, vscode.Uri, string]
+      | undefined;
+    assert.ok(args);
+
+    assert.strictEqual(getBaseComparisonLabel(view), "Stack changes since trunk()");
+    assert.strictEqual(state.resourceUri.scheme, "jj");
+    assert.strictEqual(uriParams(state.resourceUri).rev, "parent");
+    assert.strictEqual(args[0].scheme, "jj");
+    assert.strictEqual(uriParams(args[0]).rev, "trunk()");
+    assert.strictEqual(args[1].scheme, "jj");
+    assert.strictEqual(uriParams(args[1]).rev, "parent");
+  });
+
+  test("working-copy mode opens an editable file on the modified side", () => {
+    const view = createBaseComparisonView({
+      mode: "workingCopy",
+      baseRevision: "@--",
+    });
+    const state = toBaseComparisonResourceState(makeFileStatus(), view);
+    const args = state.command?.arguments as
+      | [vscode.Uri, vscode.Uri, string]
+      | undefined;
+    assert.ok(args);
+
+    assert.strictEqual(getBaseComparisonLabel(view), "Changes from @-- to @");
+    assert.strictEqual(
+      getBaseComparisonLabel(view, "bad revset"),
+      "Changes from @-- to @ (error: bad revset)",
+    );
+    assert.strictEqual(state.resourceUri.scheme, "jj");
+    assert.strictEqual(uriParams(state.resourceUri).rev, "base-comparison");
+    assert.strictEqual(args[0].scheme, "jj");
+    assert.strictEqual(uriParams(args[0]).rev, "@--");
+    assert.strictEqual(args[1].scheme, "file");
+  });
+
+  test("working-copy mode encodes its fixed target in the view", () => {
+    const view: BaseComparisonView = createBaseComparisonView({
+      mode: "workingCopy",
+      baseRevision: "trunk()",
+    });
+
+    assert.strictEqual(view.toRevision, "@");
+    assert.strictEqual(view.decorationRev, "base-comparison");
   });
 });
