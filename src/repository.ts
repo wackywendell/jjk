@@ -563,7 +563,27 @@ type BaseComparisonResult =
     }
   | { kind: "error"; view: BaseComparisonView; error: string };
 
-export type BaseComparisonMode = "stack" | "workingCopy";
+type ParentSectionResult =
+  | {
+      kind: "commit";
+      change: Change;
+      show: Show;
+      view: ParentCommitSectionView;
+    }
+  | {
+      kind: "cumulative";
+      change: Change;
+      fileStatuses: FileStatus[];
+      view: ParentCumulativeSectionView;
+    }
+  | {
+      kind: "error";
+      change: Change;
+      view: ParentCumulativeSectionView;
+      error: string;
+    };
+
+export type ChangesViewMode = "stack" | "cumulative";
 
 export type BaseComparisonView =
   | {
@@ -573,18 +593,36 @@ export type BaseComparisonView =
       decorationRev: string;
     }
   | {
-      kind: "workingCopy";
+      kind: "cumulative";
       baseRevision: string;
       toRevision: "@";
       decorationRev: "base-comparison";
     };
+
+export type ParentCommitSectionView = {
+  kind: "commit";
+  changeId: string;
+  decorationRev: string;
+};
+
+export type ParentCumulativeSectionView = {
+  kind: "cumulative";
+  changeId: string;
+  baseRevision: string;
+  toRevision: "@";
+  decorationRev: string;
+};
+
+export type ParentSectionView =
+  | ParentCommitSectionView
+  | ParentCumulativeSectionView;
 
 /** Settings that affect both data fetching and rendering, read once per cycle. */
 type RefreshConfig = {
   showParentCommit: boolean;
   showBaseComparison: boolean;
   baseRevision: string;
-  baseComparisonMode: BaseComparisonMode;
+  changesViewMode: ChangesViewMode;
 };
 
 /**
@@ -596,12 +634,41 @@ type RepoSnapshot = {
   fileStatusesByChange: Map<string, FileStatus[]>;
   conflictedFilesByChange: Map<string, Set<string>>;
   parentShowResults: Map<string, Show>;
+  parentSectionResults: Map<string, ParentSectionResult>;
   baseComparisonResult: BaseComparisonResult | undefined;
   trackedFiles: Set<string>;
 };
 
-function parseBaseComparisonMode(value: string | undefined): BaseComparisonMode {
-  return value === "workingCopy" ? "workingCopy" : "stack";
+export function parseChangesViewMode(
+  value: string | undefined,
+): ChangesViewMode {
+  return value === "cumulative" || value === "workingCopy"
+    ? "cumulative"
+    : "stack";
+}
+
+function configuredChangesViewMode(
+  config: vscode.WorkspaceConfiguration,
+): ChangesViewMode {
+  const inspection = config.inspect<string>("changesViewMode");
+  const explicitValue =
+    inspection?.workspaceFolderValue ??
+    inspection?.workspaceValue ??
+    inspection?.globalValue;
+
+  return parseChangesViewMode(
+    explicitValue ?? config.get<string>("baseComparisonMode"),
+  );
+}
+
+function shortJJErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // Parse jj's "error: <detail>" stderr format; falls back to a truncated
+  // message if jj ever changes its output format.
+  return (
+    message.match(/error:\s*([\s\S]+?)(?:\n|$)/i)?.[1] ??
+    message.substring(0, 80)
+  );
 }
 
 export function createBaseComparisonView(
@@ -612,13 +679,13 @@ export function createBaseComparisonView(
         toRevision: string;
       }
     | {
-        mode: "workingCopy";
+        mode: "cumulative";
         baseRevision: string;
       },
 ): BaseComparisonView {
-  if (args.mode === "workingCopy") {
+  if (args.mode === "cumulative") {
     return {
-      kind: "workingCopy",
+      kind: "cumulative",
       baseRevision: args.baseRevision,
       toRevision: "@",
       decorationRev: "base-comparison",
@@ -633,12 +700,50 @@ export function createBaseComparisonView(
   };
 }
 
+export function createParentSectionView(args: {
+  mode: "commit";
+  changeId: string;
+}): ParentCommitSectionView;
+export function createParentSectionView(args: {
+  mode: "cumulative";
+  changeId: string;
+  baseRevision: string;
+}): ParentCumulativeSectionView;
+export function createParentSectionView(
+  args:
+    | {
+        mode: "commit";
+        changeId: string;
+      }
+    | {
+        mode: "cumulative";
+        changeId: string;
+        baseRevision: string;
+      },
+): ParentSectionView {
+  if (args.mode === "cumulative") {
+    return {
+      kind: "cumulative",
+      changeId: args.changeId,
+      baseRevision: args.baseRevision,
+      toRevision: "@",
+      decorationRev: `parent-cumulative:${args.changeId}`,
+    };
+  }
+
+  return {
+    kind: "commit",
+    changeId: args.changeId,
+    decorationRev: args.changeId,
+  };
+}
+
 export function getBaseComparisonLabel(
   view: BaseComparisonView,
   error?: string,
 ) {
   const label =
-    view.kind === "workingCopy"
+    view.kind === "cumulative"
       ? `Changes from ${view.baseRevision} to @`
       : `Stack changes since ${view.baseRevision}`;
   return error ? `${label} (error: ${error})` : label;
@@ -652,13 +757,13 @@ export function toBaseComparisonResourceState(
     rev: view.baseRevision,
   });
   const afterUri =
-    view.kind === "workingCopy"
+    view.kind === "cumulative"
       ? vscode.Uri.file(fileStatus.path)
       : toJJUri(vscode.Uri.file(fileStatus.path), {
           rev: view.toRevision,
         });
   const resourceUri =
-    view.kind === "workingCopy"
+    view.kind === "cumulative"
       ? toJJUri(vscode.Uri.file(fileStatus.path), {
           rev: view.decorationRev,
         })
@@ -668,10 +773,42 @@ export function toBaseComparisonResourceState(
     fileStatus,
     beforeUri,
     afterUri,
-    view.kind === "workingCopy"
+    view.kind === "cumulative"
       ? `(${view.baseRevision}..@)`
       : `(${view.baseRevision})`,
     resourceUri,
+  );
+}
+
+export function toParentSectionResourceState(
+  fileStatus: FileStatus,
+  view: ParentSectionView,
+  repositoryRoot: string,
+): vscode.SourceControlResourceState {
+  if (view.kind === "commit") {
+    const afterUri = toJJUri(vscode.Uri.file(fileStatus.path), {
+      rev: view.changeId,
+    });
+    return toResourceState(
+      fileStatus,
+      toJJUri(vscode.Uri.file(fileStatus.path), {
+        diffOriginalRev: view.changeId,
+      }),
+      afterUri,
+      `(${view.changeId})`,
+      afterUri,
+    );
+  }
+
+  const beforePath = fileStatus.renamedFrom
+    ? path.join(repositoryRoot, fileStatus.renamedFrom)
+    : fileStatus.path;
+  return toResourceState(
+    fileStatus,
+    toJJUri(vscode.Uri.file(beforePath), { rev: view.baseRevision }),
+    vscode.Uri.file(fileStatus.path),
+    `(${view.baseRevision}..@)`,
+    toJJUri(vscode.Uri.file(fileStatus.path), { rev: view.decorationRev }),
   );
 }
 
@@ -846,9 +983,7 @@ export class RepositorySourceControlManager {
         showBaseComparison:
           vsConfig.get<boolean>("showBaseComparison") ?? false,
         baseRevision: vsConfig.get<string>("baseRevision") ?? "trunk()",
-        baseComparisonMode: parseBaseComparisonMode(
-          vsConfig.get<string>("baseComparisonMode"),
-        ),
+        changesViewMode: configuredChangesViewMode(vsConfig),
       };
 
       this.snapshot = await this.buildSnapshot(status, config);
@@ -864,6 +999,7 @@ export class RepositorySourceControlManager {
   ): Promise<RepoSnapshot> {
     const trackedFiles = new Set<string>();
     const parentShowResults = new Map<string, Show>();
+    const parentSectionResults = new Map<string, ParentSectionResult>();
     const fileStatusesByChange = new Map<string, FileStatus[]>([
       ["@", status.fileStatuses],
     ]);
@@ -894,8 +1030,61 @@ export class RepositorySourceControlManager {
 
       for (const { changeId, showResult } of parentShowResultsArray) {
         parentShowResults.set(changeId, showResult);
-        fileStatusesByChange.set(changeId, showResult.fileStatuses);
-        conflictedFilesByChange.set(changeId, showResult.conflictedFiles);
+
+        const commitView = createParentSectionView({
+          mode: "commit",
+          changeId,
+        });
+        const parentBaseRevision = showResult.change.parentChangeIds[0];
+        if (
+          config.changesViewMode === "cumulative" &&
+          showResult.change.parentChangeIds.length === 1 &&
+          parentBaseRevision
+        ) {
+          const cumulativeView = createParentSectionView({
+            mode: "cumulative",
+            changeId,
+            baseRevision: parentBaseRevision,
+          });
+          try {
+            const fileStatuses = await this.repository.diffSummary(
+              parentBaseRevision,
+              cumulativeView.toRevision,
+            );
+            parentSectionResults.set(changeId, {
+              kind: "cumulative",
+              change: showResult.change,
+              fileStatuses,
+              view: cumulativeView,
+            });
+            fileStatusesByChange.set(
+              cumulativeView.decorationRev,
+              fileStatuses,
+            );
+          } catch (error) {
+            const shortMessage = shortJJErrorMessage(error);
+            parentSectionResults.set(changeId, {
+              kind: "error",
+              change: showResult.change,
+              view: cumulativeView,
+              error: shortMessage,
+            });
+            logger.warn(
+              `Cumulative parent comparison failed for revset "${parentBaseRevision}": ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        } else {
+          parentSectionResults.set(changeId, {
+            kind: "commit",
+            change: showResult.change,
+            show: showResult,
+            view: commitView,
+          });
+          fileStatusesByChange.set(changeId, showResult.fileStatuses);
+          conflictedFilesByChange.set(changeId, showResult.conflictedFiles);
+        }
       }
     }
 
@@ -906,9 +1095,9 @@ export class RepositorySourceControlManager {
 
     if (config.showBaseComparison) {
       const view =
-        config.baseComparisonMode === "workingCopy"
+        config.changesViewMode === "cumulative"
           ? createBaseComparisonView({
-              mode: "workingCopy",
+              mode: "cumulative",
               baseRevision: config.baseRevision,
             })
           : (() => {
@@ -940,15 +1129,10 @@ export class RepositorySourceControlManager {
           };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          // Parse jj's "error: <detail>" stderr format; falls back to a
-          // truncated message if jj ever changes its output format.
-          const shortMessage =
-            message.match(/error:\s*([\s\S]+?)(?:\n|$)/i)?.[1] ??
-            message.substring(0, 80);
           baseComparisonResult = {
             kind: "error",
             view,
-            error: shortMessage,
+            error: shortJJErrorMessage(e),
           };
           logger.warn(
             `Base comparison failed for revset "${config.baseRevision}": ${message}`,
@@ -972,6 +1156,7 @@ export class RepositorySourceControlManager {
       fileStatusesByChange,
       conflictedFilesByChange,
       parentShowResults,
+      parentSectionResults,
       baseComparisonResult,
       trackedFiles,
     };
@@ -1057,6 +1242,29 @@ export class RepositorySourceControlManager {
     this.baseComparisonGroups = [];
   }
 
+  isCommitResourceGroup(resourceGroup: vscode.SourceControlResourceGroup) {
+    if (this.workingCopyResourceGroup === resourceGroup) {
+      return true;
+    }
+
+    if (!this.parentResourceGroups.includes(resourceGroup)) {
+      return false;
+    }
+
+    return (
+      this.snapshot?.parentSectionResults.get(resourceGroup.id)?.kind ===
+      "commit"
+    );
+  }
+
+  getCommitGroupIds(): string[] {
+    const parentCommitGroupIds = this.parentResourceGroups
+      .filter((group) => this.isCommitResourceGroup(group))
+      .map((group) => group.id);
+
+    return [this.workingCopyResourceGroup.id, ...parentCommitGroupIds];
+  }
+
   private renderParentGroups(snapshot: RepoSnapshot, config: RefreshConfig) {
     const validParentIds = new Set(
       config.showParentCommit
@@ -1084,25 +1292,50 @@ export class RepositorySourceControlManager {
         this.parentResourceGroups.push(group);
       }
 
-      group.label = RepositorySourceControlManager.getLabel(
-        "Parent Commit",
-        parentChange,
-      );
-
-      const showResult = snapshot.parentShowResults.get(parentChange.changeId);
-      if (showResult) {
-        group.resourceStates = showResult.fileStatuses.map((parentStatus) =>
-          toResourceState(
-            parentStatus,
-            toJJUri(vscode.Uri.file(parentStatus.path), {
-              diffOriginalRev: parentChange.changeId,
-            }),
-            toJJUri(vscode.Uri.file(parentStatus.path), {
-              rev: parentChange.changeId,
-            }),
-            `(${parentChange.changeId})`,
-          ),
+      const result = snapshot.parentSectionResults.get(parentChange.changeId);
+      if (!result) {
+        group.label = RepositorySourceControlManager.getLabel(
+          "Parent Commit",
+          parentChange,
         );
+        group.resourceStates = [];
+        continue;
+      }
+
+      switch (result.kind) {
+        case "commit":
+          group.label = RepositorySourceControlManager.getLabel(
+            "Parent Commit",
+            result.change,
+          );
+          group.resourceStates = result.show.fileStatuses.map((parentStatus) =>
+            toParentSectionResourceState(
+              parentStatus,
+              result.view,
+              this.repositoryRoot,
+            ),
+          );
+          break;
+        case "cumulative":
+          group.label = RepositorySourceControlManager.getLabel(
+            "Parent Commit (cumulative)",
+            result.change,
+          );
+          group.resourceStates = result.fileStatuses.map((parentStatus) =>
+            toParentSectionResourceState(
+              parentStatus,
+              result.view,
+              this.repositoryRoot,
+            ),
+          );
+          break;
+        case "error":
+          group.label = `${RepositorySourceControlManager.getLabel(
+            "Parent Commit (cumulative)",
+            result.change,
+          )} (error: ${result.error})`;
+          group.resourceStates = [];
+          break;
       }
     }
   }

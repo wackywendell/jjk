@@ -3,11 +3,12 @@ import path from "path";
 import "./repository";
 import {
   initExtensionDir,
+  parseChangesViewMode,
   provideOriginalResource,
   WorkspaceSourceControlManager,
 } from "./repository";
 import type {
-  BaseComparisonMode,
+  ChangesViewMode,
   JJRepository,
   ChangeWithDetails,
   FileStatus,
@@ -80,6 +81,7 @@ export async function activate(context: vscode.ExtensionContext) {
       "selectedRepository",
       repository.repositoryRoot,
     );
+    updateChangesViewModeContextKey();
     _onDidSetSelectedRepository.fire();
   }
 
@@ -129,6 +131,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     if (
       e.affectsConfiguration("jjk.baseRevision") ||
+      e.affectsConfiguration("jjk.changesViewMode") ||
       e.affectsConfiguration("jjk.baseComparisonMode") ||
       e.affectsConfiguration("jjk.showBaseComparison") ||
       e.affectsConfiguration("jjk.showParentCommit")
@@ -141,6 +144,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }),
       );
       updateScmGroupContextKeys();
+      updateChangesViewModeContextKey();
     }
   });
 
@@ -714,6 +718,24 @@ export async function activate(context: vscode.ExtensionContext) {
       return resourceGroup;
     }
 
+    function requireCommitResourceGroup(
+      resourceGroup: vscode.SourceControlResourceGroup,
+      action: string,
+    ) {
+      const scm = workspaceSCM.getRepositorySourceControlManagerFromResourceGroup(
+        resourceGroup,
+      );
+      if (!scm) {
+        throw new Error("SCM not found for resource group");
+      }
+      if (!scm.isCommitResourceGroup(resourceGroup)) {
+        throw new Error(
+          `${action} is not available for cumulative parent comparison sections`,
+        );
+      }
+      return scm;
+    }
+
     context.subscriptions.push(
       vscode.commands.registerCommand(
         "jj.restoreResourceState",
@@ -755,16 +777,19 @@ export async function activate(context: vscode.ExtensionContext) {
                   return foundStatus;
                 });
               } else if (scm.parentResourceGroups.includes(resourceGroup)) {
-                const show = scm.snapshot?.parentShowResults.get(resourceGroup.id);
-                if (!show) {
+                const parentSection = scm.snapshot?.parentSectionResults.get(
+                  resourceGroup.id,
+                );
+                if (parentSection?.kind !== "commit") {
                   throw new Error(
-                    "No current parent change show result found for the resource group",
+                    "Restore is not available for cumulative parent comparison sections",
                   );
                 }
 
                 statuses = resourceStates.map((resourceState) => {
-                  const foundStatus = show.fileStatuses.find((status) =>
-                    pathEquals(status.path, resourceState.resourceUri.fsPath),
+                  const foundStatus = parentSection.show.fileStatuses.find(
+                    (status) =>
+                      pathEquals(status.path, resourceState.resourceUri.fsPath),
                   );
                   if (!foundStatus) {
                     throw new Error(
@@ -874,6 +899,7 @@ export async function activate(context: vscode.ExtensionContext) {
           async (...resourceStates: vscode.SourceControlResourceState[]) => {
             try {
               const resourceGroup = getSharedResourceGroup(resourceStates);
+              requireCommitResourceGroup(resourceGroup, "Squash");
               const repository =
                 workspaceSCM.getRepositoryFromResourceGroup(resourceGroup);
               if (!repository) {
@@ -930,6 +956,7 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand(
         "jj.describe",
         async (resourceGroup: vscode.SourceControlResourceGroup) => {
+          requireCommitResourceGroup(resourceGroup, "Describe");
           const repository =
             workspaceSCM.getRepositoryFromResourceGroup(resourceGroup);
           if (!repository) {
@@ -1030,6 +1057,7 @@ export async function activate(context: vscode.ExtensionContext) {
         "jj.squashToWorkingCopyResourceGroup",
         showLoading(
           async (resourceGroup: vscode.SourceControlResourceGroup) => {
+            requireCommitResourceGroup(resourceGroup, "Squash");
             const repository =
               workspaceSCM.getRepositoryFromResourceGroup(resourceGroup);
             if (!repository) {
@@ -1085,6 +1113,7 @@ export async function activate(context: vscode.ExtensionContext) {
         showLoading(
           async (resourceGroup: vscode.SourceControlResourceGroup) => {
             try {
+              requireCommitResourceGroup(resourceGroup, "Restore");
               const repository =
                 workspaceSCM.getRepositoryFromResourceGroup(resourceGroup);
               if (!repository) {
@@ -1106,6 +1135,7 @@ export async function activate(context: vscode.ExtensionContext) {
         "jj.editResourceGroup",
         async (resourceGroup: vscode.SourceControlResourceGroup) => {
           try {
+            requireCommitResourceGroup(resourceGroup, "Edit");
             const repository =
               workspaceSCM.getRepositoryFromResourceGroup(resourceGroup);
             if (!repository) {
@@ -1792,6 +1822,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     updateScmGroupContextKeys();
+    updateChangesViewModeContextKey();
   }
 
   /**
@@ -1799,13 +1830,14 @@ export async function activate(context: vscode.ExtensionContext) {
    * commit groups vs base comparison groups. This is used in package.json
    * when clauses via the `in` operator (e.g. `scmResourceGroup in
    * jj.commitGroupIds`) to reliably control which buttons appear on each
-   * group type — more robust than regex matching on group IDs.
+   * group type — more robust than regex matching on group IDs. In cumulative
+   * mode, parent sections render comparison ranges, so they intentionally drop
+   * out of commitGroupIds and do not show commit-mutating actions.
    */
   function updateScmGroupContextKeys() {
-    const commitGroupIds = workspaceSCM.repoSCMs.flatMap((repo) => [
-      repo.workingCopyResourceGroup.id,
-      ...repo.parentResourceGroups.map((g) => g.id),
-    ]);
+    const commitGroupIds = workspaceSCM.repoSCMs.flatMap((repo) =>
+      repo.getCommitGroupIds(),
+    );
     const baseComparisonGroupIds = workspaceSCM.repoSCMs.flatMap((repo) =>
       repo.baseComparisonGroups.map((g) => g.id),
     );
@@ -1818,6 +1850,24 @@ export async function activate(context: vscode.ExtensionContext) {
       "setContext",
       "jj.baseComparisonGroupIds",
       baseComparisonGroupIds,
+    );
+  }
+
+  function updateChangesViewModeContextKey() {
+    let changesViewMode: ChangesViewMode = "stack";
+    if (workspaceSCM.repoSCMs.length > 0) {
+      const repository = getSelectedRepo();
+      const config = vscode.workspace.getConfiguration(
+        "jjk",
+        vscode.Uri.file(repository.repositoryRoot),
+      );
+      changesViewMode = getChangesViewMode(config);
+    }
+
+    vscode.commands.executeCommand(
+      "setContext",
+      "jj.changesViewMode",
+      changesViewMode,
     );
   }
 
@@ -1844,19 +1894,18 @@ export async function activate(context: vscode.ExtensionContext) {
     config: vscode.WorkspaceConfiguration,
   ) {
     const showParentCommit = config.get<boolean>("showParentCommit") ?? true;
-    const baseComparisonMode =
-      config.get<string>("baseComparisonMode") ?? "stack";
+    const changesViewMode = getChangesViewMode(config);
 
     const items: vscode.QuickPickItem[] = [
       { label: "trunk()", description: "Default: main branch" },
     ];
     // In split-stack mode, @-- is only useful when parent commit groups are
     // hidden. In cumulative mode, it means "show this stack through @."
-    if (!showParentCommit || baseComparisonMode === "workingCopy") {
+    if (!showParentCommit || changesViewMode === "cumulative") {
       items.push({
         label: "@--",
         description:
-          baseComparisonMode === "workingCopy"
+          changesViewMode === "cumulative"
             ? "Current stack base"
             : "Parent commit changes",
       });
@@ -1901,14 +1950,28 @@ export async function activate(context: vscode.ExtensionContext) {
     return true;
   }
 
-  async function updateBaseComparisonModeValue(mode: BaseComparisonMode) {
+  function getChangesViewMode(
+    config: vscode.WorkspaceConfiguration,
+  ): ChangesViewMode {
+    const inspection = config.inspect<string>("changesViewMode");
+    const explicitValue =
+      inspection?.workspaceFolderValue ??
+      inspection?.workspaceValue ??
+      inspection?.globalValue;
+
+    return parseChangesViewMode(
+      explicitValue ?? config.get<string>("baseComparisonMode"),
+    );
+  }
+
+  async function updateChangesViewModeValue(mode: ChangesViewMode) {
     const repository = getSelectedRepo();
     const config = vscode.workspace.getConfiguration(
       "jjk",
       vscode.Uri.file(repository.repositoryRoot),
     );
     await config.update(
-      "baseComparisonMode",
+      "changesViewMode",
       mode,
       vscode.ConfigurationTarget.Workspace,
     );
@@ -1965,18 +2028,15 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("jj.useStackBaseComparison", async () => {
-      await updateBaseComparisonModeValue("stack");
+    vscode.commands.registerCommand("jj.useStackChangesView", async () => {
+      await updateChangesViewModeValue("stack");
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "jj.useCumulativeBaseComparison",
-      async () => {
-        await updateBaseComparisonModeValue("workingCopy");
-      },
-    ),
+    vscode.commands.registerCommand("jj.useCumulativeChangesView", async () => {
+      await updateChangesViewModeValue("cumulative");
+    }),
   );
 
   context.subscriptions.push(

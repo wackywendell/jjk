@@ -284,13 +284,13 @@
         "icon": "$(eye-closed)"
       },
       {
-        "command": "jj.useStackBaseComparison",
+        "command": "jj.useStackChangesView",
         "title": "Use Stack Mode",
         "category": "Jujutsu",
         "icon": "$(list-tree)"
       },
       {
-        "command": "jj.useCumulativeBaseComparison",
+        "command": "jj.useCumulativeChangesView",
         "title": "Use Cumulative Mode",
         "category": "Jujutsu",
         "icon": "$(diff)"
@@ -452,14 +452,14 @@
           "group": "changesView@3"
         },
         {
-          "command": "jj.useCumulativeBaseComparison",
-          "when": "scmProvider == jj && config.jjk.baseComparisonMode == stack",
-          "group": "changesView@4"
+          "command": "jj.useCumulativeChangesView",
+          "when": "scmProvider == jj && jj.changesViewMode == stack",
+          "group": "navigation@3"
         },
         {
-          "command": "jj.useStackBaseComparison",
-          "when": "scmProvider == jj && config.jjk.baseComparisonMode == workingCopy",
-          "group": "changesView@4"
+          "command": "jj.useStackChangesView",
+          "when": "scmProvider == jj && jj.changesViewMode == cumulative",
+          "group": "navigation@3"
         }
       ],
       "scm/resourceGroup/context": [
@@ -497,16 +497,6 @@
           "command": "jj.hideBaseComparison",
           "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds",
           "group": "changesView@1"
-        },
-        {
-          "command": "jj.useCumulativeBaseComparison",
-          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds && config.jjk.baseComparisonMode == stack",
-          "group": "changesView@2"
-        },
-        {
-          "command": "jj.useStackBaseComparison",
-          "when": "scmProvider == jj && scmResourceGroup in jj.baseComparisonGroupIds && config.jjk.baseComparisonMode == workingCopy",
-          "group": "changesView@2"
         }
       ],
       "scm/resourceState/context": [
@@ -595,11 +585,11 @@
           "when": "false"
         },
         {
-          "command": "jj.useStackBaseComparison",
+          "command": "jj.useStackChangesView",
           "when": "false"
         },
         {
-          "command": "jj.useCumulativeBaseComparison",
+          "command": "jj.useCumulativeChangesView",
           "when": "false"
         },
         {
@@ -740,7 +730,7 @@
         "jjk.showBaseComparison": {
           "type": "boolean",
           "default": false,
-          "description": "Whether to show Base Comparison sections in the Source Control view. The comparison range is controlled by jjk.baseComparisonMode.",
+          "description": "Whether to show Base Comparison sections in the Source Control view. The comparison range is controlled by jjk.changesViewMode.",
           "scope": "resource"
         },
         "jjk.baseRevision": {
@@ -749,18 +739,18 @@
           "description": "Revset expression for the base of the comparison. Used by the Base Comparison section.",
           "scope": "resource"
         },
-        "jjk.baseComparisonMode": {
+        "jjk.changesViewMode": {
           "type": "string",
           "enum": [
             "stack",
-            "workingCopy"
+            "cumulative"
           ],
           "enumDescriptions": [
-            "Show only the portion not already represented by visible parent and working-copy groups.",
-            "Show cumulative changes from the base revision through @, with the modified side opened from the editable working tree."
+            "Show non-overlapping Working Copy, Parent Commit, and Base Comparison sections.",
+            "Show cumulative parent and base comparisons through @, with modified sides opened from the editable working tree."
           ],
           "default": "stack",
-          "description": "How the Base Comparison section chooses its comparison target.",
+          "description": "How the Source Control changes view displays parent and base comparison sections.",
           "scope": "resource"
         }
       }

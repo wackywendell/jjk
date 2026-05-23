@@ -316,6 +316,28 @@ suite("getBaseComparisonTarget", () => {
   });
 });
 
+suite("parseChangesViewMode", () => {
+  let parseChangesViewMode: typeof import("../repository").parseChangesViewMode;
+
+  suiteSetup(async () => {
+    ({ parseChangesViewMode } = (await getExtensionAPI()).repository);
+  });
+
+  test("accepts stack and cumulative values", () => {
+    assert.strictEqual(parseChangesViewMode("stack"), "stack");
+    assert.strictEqual(parseChangesViewMode("cumulative"), "cumulative");
+  });
+
+  test("maps the old workingCopy value to cumulative", () => {
+    assert.strictEqual(parseChangesViewMode("workingCopy"), "cumulative");
+  });
+
+  test("defaults unknown values to stack", () => {
+    assert.strictEqual(parseChangesViewMode(undefined), "stack");
+    assert.strictEqual(parseChangesViewMode("nope"), "stack");
+  });
+});
+
 suite("base comparison view", () => {
   let createBaseComparisonView: typeof import("../repository").createBaseComparisonView;
   let getBaseComparisonLabel: typeof import("../repository").getBaseComparisonLabel;
@@ -362,9 +384,9 @@ suite("base comparison view", () => {
     assert.strictEqual(uriParams(args[1]).rev, "parent");
   });
 
-  test("working-copy mode opens an editable file on the modified side", () => {
+  test("cumulative mode opens an editable file on the modified side", () => {
     const view = createBaseComparisonView({
-      mode: "workingCopy",
+      mode: "cumulative",
       baseRevision: "@--",
     });
     const state = toBaseComparisonResourceState(makeFileStatus(), view);
@@ -385,13 +407,120 @@ suite("base comparison view", () => {
     assert.strictEqual(args[1].scheme, "file");
   });
 
-  test("working-copy mode encodes its fixed target in the view", () => {
+  test("cumulative mode encodes its fixed target in the view", () => {
     const view: BaseComparisonView = createBaseComparisonView({
-      mode: "workingCopy",
+      mode: "cumulative",
       baseRevision: "trunk()",
     });
 
     assert.strictEqual(view.toRevision, "@");
     assert.strictEqual(view.decorationRev, "base-comparison");
+  });
+});
+
+suite("parent section view", () => {
+  let createParentSectionView: typeof import("../repository").createParentSectionView;
+  let toParentSectionResourceState: typeof import("../repository").toParentSectionResourceState;
+
+  suiteSetup(async () => {
+    ({
+      createParentSectionView,
+      toParentSectionResourceState,
+    } = (await getExtensionAPI()).repository);
+  });
+
+  const repositoryRoot = path.join(path.sep, "repo");
+
+  function makeFileStatus(): FileStatus {
+    return {
+      type: "M",
+      file: "src/file.ts",
+      path: path.join(repositoryRoot, "src", "file.ts"),
+    };
+  }
+
+  function uriParams(uri: { query: string }) {
+    return JSON.parse(uri.query) as Record<string, string>;
+  }
+
+  test("stack parent sections use commit revision resources", () => {
+    const view = createParentSectionView({
+      mode: "commit",
+      changeId: "parent",
+    });
+    const state = toParentSectionResourceState(
+      makeFileStatus(),
+      view,
+      repositoryRoot,
+    );
+    const args = state.command?.arguments as
+      | [vscode.Uri, vscode.Uri, string]
+      | undefined;
+    assert.ok(args);
+
+    assert.strictEqual(state.resourceUri.scheme, "jj");
+    assert.strictEqual(uriParams(state.resourceUri).rev, "parent");
+    assert.strictEqual(args[0].scheme, "jj");
+    assert.strictEqual(uriParams(args[0]).diffOriginalRev, "parent");
+    assert.strictEqual(args[1].scheme, "jj");
+    assert.strictEqual(uriParams(args[1]).rev, "parent");
+  });
+
+  test("cumulative parent sections open an editable file on the modified side", () => {
+    const view = createParentSectionView({
+      mode: "cumulative",
+      changeId: "parent",
+      baseRevision: "grandparent",
+    });
+    const state = toParentSectionResourceState(
+      makeFileStatus(),
+      view,
+      repositoryRoot,
+    );
+    const args = state.command?.arguments as
+      | [vscode.Uri, vscode.Uri, string]
+      | undefined;
+    assert.ok(args);
+
+    assert.strictEqual(view.toRevision, "@");
+    assert.strictEqual(state.resourceUri.scheme, "jj");
+    assert.strictEqual(
+      uriParams(state.resourceUri).rev,
+      "parent-cumulative:parent",
+    );
+    assert.strictEqual(args[0].scheme, "jj");
+    assert.strictEqual(uriParams(args[0]).rev, "grandparent");
+    assert.strictEqual(args[1].scheme, "file");
+  });
+
+  test("cumulative parent sections read renamed files from the base path", () => {
+    const view = createParentSectionView({
+      mode: "cumulative",
+      changeId: "parent",
+      baseRevision: "grandparent",
+    });
+    const state = toParentSectionResourceState(
+      {
+        type: "R",
+        file: "src/new.ts",
+        path: path.join(repositoryRoot, "src", "new.ts"),
+        renamedFrom: "src/old.ts",
+      },
+      view,
+      repositoryRoot,
+    );
+    const args = state.command?.arguments as
+      | [vscode.Uri, vscode.Uri, string]
+      | undefined;
+    assert.ok(args);
+
+    assert.strictEqual(
+      args[0].fsPath,
+      path.join(repositoryRoot, "src", "old.ts"),
+    );
+    assert.strictEqual(
+      args[1].fsPath,
+      path.join(repositoryRoot, "src", "new.ts"),
+    );
   });
 });
