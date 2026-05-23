@@ -2,8 +2,9 @@ import * as vscode from "vscode";
 import path from "path";
 import "./repository";
 import {
+  displayChangeId,
+  getConfiguredChangesViewMode,
   initExtensionDir,
-  parseChangesViewMode,
   provideOriginalResource,
   WorkspaceSourceControlManager,
 } from "./repository";
@@ -456,10 +457,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 after: {
                   backgroundColor: "#00000000",
                   color: "#99999959",
-                  contentText: ` ${change.author.name} at ${change.authoredDate} • ${change.description || "(no description)"} • ${change.changeId.substring(
-                    0,
-                    8,
-                  )} `,
+                  contentText: ` ${change.author.name} at ${change.authoredDate} • ${change.description || "(no description)"} • ${displayChangeId(change)} `,
                   textDecoration: "none;",
                 },
               },
@@ -838,7 +836,7 @@ export async function activate(context: vscode.ExtensionContext) {
               let destinationParentChange = status.parentChanges[0];
               if (status.parentChanges.length > 1) {
                 const parentOptions = status.parentChanges.map((parent) => ({
-                  label: parent.changeId,
+                  label: displayChangeId(parent),
                   description: parent.description || "(no description)",
                   parent,
                 }));
@@ -1001,7 +999,7 @@ export async function activate(context: vscode.ExtensionContext) {
             let destinationParentChange = status.parentChanges[0];
             if (status.parentChanges.length > 1) {
               const parentOptions = status.parentChanges.map((parent) => ({
-                label: parent.changeId,
+                label: displayChangeId(parent),
                 description: parent.description || "(no description)",
                 parent,
               }));
@@ -1473,7 +1471,7 @@ export async function activate(context: vscode.ExtensionContext) {
                   .map(async (changeId) => {
                     const show = await repository.show(changeId);
                     return {
-                      label: `$(arrow-up) Child: ${changeId.substring(0, 8)}`,
+                      label: `$(arrow-up) Child: ${displayChangeId(show.change)}`,
                       description:
                         show.change.description || "(no description)",
                       alwaysShow: true,
@@ -1489,7 +1487,7 @@ export async function activate(context: vscode.ExtensionContext) {
           const status = await repository.status(true);
           for (const parent of status.parentChanges) {
             items.push({
-              label: `$(arrow-down) Parent: ${parent.changeId.substring(0, 8)}`,
+              label: `$(arrow-down) Parent: ${displayChangeId(parent)}`,
               description: parent.description || "(no description)",
               alwaysShow: true,
               changeId: parent.changeId,
@@ -1644,21 +1642,31 @@ export async function activate(context: vscode.ExtensionContext) {
               throw new Error("No parent changes found");
             }
 
-            let selectedParentChange: string;
+            let selectedParentChange: { rev: string; displayId: string };
             if (parentChanges.length === 1) {
-              selectedParentChange = parentChanges[0];
+              const changeId = parentChanges[0];
+              const show = await repository.show(changeId);
+              selectedParentChange = {
+                rev: changeId,
+                displayId: displayChangeId(show.change),
+              };
             } else {
               const items = (await Promise.all(
                 parentChanges.map(async (changeId) => {
                   const show = await repository.show(changeId);
+                  const displayId = displayChangeId(show.change);
                   return {
-                    label: `$(arrow-down) Parent: ${changeId.substring(0, 8)}`,
+                    label: `$(arrow-down) Parent: ${displayId}`,
                     description: show.change.description || "(no description)",
                     alwaysShow: true,
                     changeId,
+                    displayId,
                   };
                 }),
-              )) satisfies vscode.QuickPickItem[];
+              )) satisfies (vscode.QuickPickItem & {
+                changeId: string;
+                displayId: string;
+              })[];
 
               const selection = await vscode.window.showQuickPick(items, {
                 placeHolder: "Select parent change to open",
@@ -1667,28 +1675,31 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
               }
 
-              selectedParentChange = selection.changeId;
+              selectedParentChange = {
+                rev: selection.changeId,
+                displayId: selection.displayId,
+              };
             }
 
             if (getActiveTextEditorDiff()) {
               await vscode.commands.executeCommand(
                 "vscode.diff",
                 toJJUri(uri, {
-                  diffOriginalRev: selectedParentChange,
+                  diffOriginalRev: selectedParentChange.rev,
                 }),
                 toJJUri(uri, {
-                  rev: selectedParentChange,
+                  rev: selectedParentChange.rev,
                 }),
-                `${path.basename(uri.fsPath)} (${selectedParentChange.substring(0, 8)})`,
+                `${path.basename(uri.fsPath)} (${selectedParentChange.displayId})`,
               );
             } else {
               await vscode.commands.executeCommand(
                 "vscode.open",
                 toJJUri(uri, {
-                  rev: selectedParentChange,
+                  rev: selectedParentChange.rev,
                 }),
                 {},
-                `${path.basename(uri.fsPath)} (${selectedParentChange.substring(0, 8)})`,
+                `${path.basename(uri.fsPath)} (${selectedParentChange.displayId})`,
               );
             }
           } catch (error) {
@@ -1743,21 +1754,31 @@ export async function activate(context: vscode.ExtensionContext) {
               throw new Error("No child changes found");
             }
 
-            let selectedChildChange: string;
+            let selectedChildChange: { rev: string; displayId: string };
             if (childChanges.length === 1) {
-              selectedChildChange = childChanges[0];
+              const changeId = childChanges[0];
+              const show = await repository.show(changeId);
+              selectedChildChange = {
+                rev: changeId,
+                displayId: displayChangeId(show.change),
+              };
             } else {
               const items = (await Promise.all(
                 childChanges.map(async (changeId) => {
                   const show = await repository.show(changeId);
+                  const displayId = displayChangeId(show.change);
                   return {
-                    label: `$(arrow-up) Child: ${changeId.substring(0, 8)}`,
+                    label: `$(arrow-up) Child: ${displayId}`,
                     description: show.change.description || "(no description)",
                     alwaysShow: true,
                     changeId,
+                    displayId,
                   };
                 }),
-              )) satisfies vscode.QuickPickItem[];
+              )) satisfies (vscode.QuickPickItem & {
+                changeId: string;
+                displayId: string;
+              })[];
 
               const selection = await vscode.window.showQuickPick(items, {
                 placeHolder: "Select child change to open",
@@ -1766,28 +1787,31 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
               }
 
-              selectedChildChange = selection.changeId;
+              selectedChildChange = {
+                rev: selection.changeId,
+                displayId: selection.displayId,
+              };
             }
 
             if (getActiveTextEditorDiff()) {
               await vscode.commands.executeCommand(
                 "vscode.diff",
                 toJJUri(uri, {
-                  diffOriginalRev: selectedChildChange,
+                  diffOriginalRev: selectedChildChange.rev,
                 }),
                 toJJUri(uri, {
-                  rev: selectedChildChange,
+                  rev: selectedChildChange.rev,
                 }),
-                `${path.basename(uri.fsPath)} (${selectedChildChange.substring(0, 8)})`,
+                `${path.basename(uri.fsPath)} (${selectedChildChange.displayId})`,
               );
             } else {
               await vscode.commands.executeCommand(
                 "vscode.open",
                 toJJUri(uri, {
-                  rev: selectedChildChange,
+                  rev: selectedChildChange.rev,
                 }),
                 {},
-                `${path.basename(uri.fsPath)} (${selectedChildChange.substring(0, 8)})`,
+                `${path.basename(uri.fsPath)} (${selectedChildChange.displayId})`,
               );
             }
           } catch (error) {
@@ -1861,7 +1885,7 @@ export async function activate(context: vscode.ExtensionContext) {
         "jjk",
         vscode.Uri.file(repository.repositoryRoot),
       );
-      changesViewMode = getChangesViewMode(config);
+      changesViewMode = getConfiguredChangesViewMode(config);
     }
 
     vscode.commands.executeCommand(
@@ -1894,7 +1918,7 @@ export async function activate(context: vscode.ExtensionContext) {
     config: vscode.WorkspaceConfiguration,
   ) {
     const showParentCommit = config.get<boolean>("showParentCommit") ?? true;
-    const changesViewMode = getChangesViewMode(config);
+    const changesViewMode = getConfiguredChangesViewMode(config);
 
     const items: vscode.QuickPickItem[] = [
       { label: "trunk()", description: "Default: main branch" },
@@ -1948,20 +1972,6 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.ConfigurationTarget.Workspace,
     );
     return true;
-  }
-
-  function getChangesViewMode(
-    config: vscode.WorkspaceConfiguration,
-  ): ChangesViewMode {
-    const inspection = config.inspect<string>("changesViewMode");
-    const explicitValue =
-      inspection?.workspaceFolderValue ??
-      inspection?.workspaceValue ??
-      inspection?.globalValue;
-
-    return parseChangesViewMode(
-      explicitValue ?? config.get<string>("baseComparisonMode"),
-    );
   }
 
   async function updateChangesViewModeValue(mode: ChangesViewMode) {

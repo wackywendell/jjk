@@ -555,6 +555,8 @@ export function provideOriginalResource(uri: vscode.Uri) {
   return originalUri;
 }
 
+const shortestChangeIdTemplate = "change_id.shortest()";
+
 type BaseComparisonResult =
   | {
       kind: "ok";
@@ -647,7 +649,7 @@ export function parseChangesViewMode(
     : "stack";
 }
 
-function configuredChangesViewMode(
+export function getConfiguredChangesViewMode(
   config: vscode.WorkspaceConfiguration,
 ): ChangesViewMode {
   const inspection = config.inspect<string>("changesViewMode");
@@ -738,14 +740,36 @@ export function createParentSectionView(
   };
 }
 
+export function displayChangeId(
+  change: Pick<Change, "changeId" | "shortChangeId">,
+) {
+  return change.shortChangeId || change.changeId;
+}
+
+export function formatChangeLabel(
+  sectionLabel: string,
+  change: Change,
+  error?: string,
+) {
+  const description = change.description || "(no description)";
+  const statusText = [
+    change.isEmpty ? "(empty)" : undefined,
+    change.isConflict ? "(conflict)" : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const label = `${sectionLabel} [${displayChangeId(change)}] • ${description}${
+    statusText ? ` ${statusText}` : ""
+  }`;
+
+  return error ? `${label} (error: ${error})` : label;
+}
+
 export function getBaseComparisonLabel(
   view: BaseComparisonView,
   error?: string,
 ) {
-  const label =
-    view.kind === "cumulative"
-      ? `Changes from ${view.baseRevision} to @`
-      : `Stack changes since ${view.baseRevision}`;
+  const label = `Base: ${view.baseRevision}`;
   return error ? `${label} (error: ${error})` : label;
 }
 
@@ -983,7 +1007,7 @@ export class RepositorySourceControlManager {
         showBaseComparison:
           vsConfig.get<boolean>("showBaseComparison") ?? false,
         baseRevision: vsConfig.get<string>("baseRevision") ?? "trunk()",
-        changesViewMode: configuredChangesViewMode(vsConfig),
+        changesViewMode: getConfiguredChangesViewMode(vsConfig),
       };
 
       this.snapshot = await this.buildSnapshot(status, config);
@@ -1162,14 +1186,6 @@ export class RepositorySourceControlManager {
     };
   }
 
-  static getLabel(prefix: string, change: Change) {
-    return `${prefix} [${change.changeId}]${
-      change.description ? ` • ${change.description}` : ""
-    }${change.isEmpty ? " (empty)" : ""}${
-      change.isConflict ? " (conflict)" : ""
-    }${change.description ? "" : " (no description)"}`;
-  }
-
   render(config: RefreshConfig) {
     const snapshot = this.snapshot;
     if (!snapshot?.status.workingCopy) {
@@ -1195,11 +1211,10 @@ export class RepositorySourceControlManager {
   }
 
   private renderWorkingCopy(snapshot: RepoSnapshot) {
-    this.workingCopyResourceGroup.label =
-      RepositorySourceControlManager.getLabel(
-        "Working Copy",
-        snapshot.status.workingCopy,
-      );
+    this.workingCopyResourceGroup.label = formatChangeLabel(
+      "Working Copy",
+      snapshot.status.workingCopy,
+    );
     this.workingCopyResourceGroup.resourceStates =
       snapshot.status.fileStatuses.map((fileStatus) =>
         toResourceState(
@@ -1294,8 +1309,8 @@ export class RepositorySourceControlManager {
 
       const result = snapshot.parentSectionResults.get(parentChange.changeId);
       if (!result) {
-        group.label = RepositorySourceControlManager.getLabel(
-          "Parent Commit",
+        group.label = formatChangeLabel(
+          config.changesViewMode === "cumulative" ? "Parent+" : "Parent",
           parentChange,
         );
         group.resourceStates = [];
@@ -1304,10 +1319,7 @@ export class RepositorySourceControlManager {
 
       switch (result.kind) {
         case "commit":
-          group.label = RepositorySourceControlManager.getLabel(
-            "Parent Commit",
-            result.change,
-          );
+          group.label = formatChangeLabel("Parent", result.change);
           group.resourceStates = result.show.fileStatuses.map((parentStatus) =>
             toParentSectionResourceState(
               parentStatus,
@@ -1317,10 +1329,7 @@ export class RepositorySourceControlManager {
           );
           break;
         case "cumulative":
-          group.label = RepositorySourceControlManager.getLabel(
-            "Parent Commit (cumulative)",
-            result.change,
-          );
+          group.label = formatChangeLabel("Parent+", result.change);
           group.resourceStates = result.fileStatuses.map((parentStatus) =>
             toParentSectionResourceState(
               parentStatus,
@@ -1330,10 +1339,7 @@ export class RepositorySourceControlManager {
           );
           break;
         case "error":
-          group.label = `${RepositorySourceControlManager.getLabel(
-            "Parent Commit (cumulative)",
-            result.change,
-          )} (error: ${result.error})`;
+          group.label = formatChangeLabel("Parent+", result.change, result.error);
           group.resourceStates = [];
           break;
       }
@@ -1492,6 +1498,7 @@ const showTemplate = template({
   recordSeparator: "jjkඞ\n",
 })
   .field("changeId", commit.change_id())
+  .field("shortChangeId", commit.change_id().shortest())
   .field("commitId", commit.commit_id())
   .field(
     "parentChangeIds",
@@ -1520,6 +1527,7 @@ const showPaginatedRecordTemplate = template({
   startSentinel: "ඞSTARTඞ",
 })
   .field("changeId", commit.change_id())
+  .field("shortChangeId", commit.change_id().shortest())
   .field("commitId", commit.commit_id())
   .field(
     "parentChangeIds",
@@ -1719,7 +1727,80 @@ export class JJRepository {
 
   async status(useCache = false): Promise<RepositoryStatus> {
     const status = await this.getStatus(useCache);
+    await this.hydratePreciseChangeIds(status);
     return status;
+  }
+
+  private async hydratePreciseChangeIds(status: RepositoryStatus) {
+    const changes = [status.workingCopy, ...status.parentChanges].filter(
+      (change) =>
+        change.changeId &&
+        (!change.shortChangeId || change.shortChangeId === change.changeId),
+    );
+    if (changes.length === 0) {
+      return;
+    }
+
+    try {
+      const resolved = await this.resolveChangeIds(
+        changes.map((change) => change.changeId),
+      );
+      for (const change of changes) {
+        const match = resolved.find(({ changeId }) =>
+          changeId.startsWith(change.changeId),
+        );
+        if (match) {
+          change.changeId = match.changeId;
+          change.shortChangeId = match.shortChangeId;
+        }
+      }
+    } catch (error) {
+      logger.warn(
+        `Failed to resolve precise change ids: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async resolveChangeIds(revs: string[]) {
+    const uniqueRevs = [...new Set(revs)].filter(Boolean);
+    if (uniqueRevs.length === 0) {
+      return [];
+    }
+
+    const revSeparator = "jjkඞ\n";
+    const fieldSeparator = "ඞjjk";
+    const templateFields = ["change_id", shortestChangeIdTemplate];
+    const template =
+      templateFields.join(` ++ "${fieldSeparator}" ++ `) +
+      ` ++ "${revSeparator}"`;
+
+    const output = (
+      await handleJJCommand(
+        this.spawnJJRead(
+          [
+            "log",
+            "-T",
+            template,
+            "--no-graph",
+            ...uniqueRevs.flatMap((rev) => ["-r", rev]),
+          ],
+          {
+            defaultTimeout: 5000,
+          },
+        ),
+      )
+    ).toString();
+
+    return output
+      .split(revSeparator)
+      .filter(Boolean)
+      .map((entry) => {
+        const [changeId, shortChangeId] = entry.split(fieldSeparator);
+        return {
+          changeId: changeId.trim(),
+          shortChangeId: shortChangeId.trim(),
+        };
+      });
   }
 
   async fileList() {
@@ -1890,6 +1971,7 @@ export class JJRepository {
     const ret: Show = {
       change: {
         changeId: "",
+        shortChangeId: "",
         commitId: "",
         parentChangeIds: [],
         parentCommitIds: [],
@@ -1912,6 +1994,9 @@ export class JJRepository {
       switch (rt.fields[i].name) {
         case "changeId":
           ret.change.changeId = value;
+          break;
+        case "shortChangeId":
+          ret.change.shortChangeId = value;
           break;
         case "commitId":
           ret.change.commitId = value;
@@ -2928,6 +3013,7 @@ export type FileStatus = {
 
 export interface Change {
   changeId: string;
+  shortChangeId: string;
   commitId: string;
   bookmarks?: string[];
   description: string;
@@ -3020,6 +3106,7 @@ async function parseJJStatus(
   const conflictedFiles = new Set<string>();
   let workingCopy: Change = {
     changeId: "",
+    shortChangeId: "",
     commitId: "",
     description: "",
     isEmpty: false,
@@ -3118,8 +3205,10 @@ async function parseJJStatus(
       const isEmpty = jjDescriptors.includes("(empty)");
       const isConflict = jjDescriptors.includes("(conflict)");
 
+      const parsedChangeId = await stripAnsiCodes(changeId);
       const commitDetails: Change = {
-        changeId: await stripAnsiCodes(changeId),
+        changeId: parsedChangeId,
+        shortChangeId: parsedChangeId,
         commitId: await stripAnsiCodes(commitId),
         bookmarks: bookmarks
           ? (await stripAnsiCodes(bookmarks)).split(/\s+/)

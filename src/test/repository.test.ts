@@ -209,6 +209,7 @@ suite("getBaseComparisonTarget", () => {
   function makeChange(changeId: string): RepositoryStatus["parentChanges"][0] {
     return {
       changeId,
+      shortChangeId: changeId.slice(0, 3),
       commitId: `commit-${changeId}`,
       description: "",
       isEmpty: false,
@@ -338,6 +339,53 @@ suite("parseChangesViewMode", () => {
   });
 });
 
+suite("change labels", () => {
+  let displayChangeId: typeof import("../repository").displayChangeId;
+  let formatChangeLabel: typeof import("../repository").formatChangeLabel;
+
+  suiteSetup(async () => {
+    ({ displayChangeId, formatChangeLabel } = (await getExtensionAPI()).repository);
+  });
+
+  test("uses section name, shortest precise change id, and description", () => {
+    assert.strictEqual(
+      formatChangeLabel("Parent+", {
+        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
+        shortChangeId: "rs",
+        commitId: "commit",
+        description: "describe labels",
+        isEmpty: false,
+        isConflict: false,
+      }),
+      "Parent+ [rs] • describe labels",
+    );
+  });
+
+  test("formats change ids for display with the shortest precise id", () => {
+    assert.strictEqual(
+      displayChangeId({
+        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
+        shortChangeId: "rs",
+      }),
+      "rs",
+    );
+  });
+
+  test("shows status flags after the description", () => {
+    assert.strictEqual(
+      formatChangeLabel("Working Copy", {
+        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
+        shortChangeId: "npl",
+        commitId: "commit",
+        description: "",
+        isEmpty: true,
+        isConflict: true,
+      }),
+      "Working Copy [npl] • (no description) (empty) (conflict)",
+    );
+  });
+});
+
 suite("base comparison view", () => {
   let createBaseComparisonView: typeof import("../repository").createBaseComparisonView;
   let getBaseComparisonLabel: typeof import("../repository").getBaseComparisonLabel;
@@ -375,7 +423,7 @@ suite("base comparison view", () => {
       | undefined;
     assert.ok(args);
 
-    assert.strictEqual(getBaseComparisonLabel(view), "Stack changes since trunk()");
+    assert.strictEqual(getBaseComparisonLabel(view), "Base: trunk()");
     assert.strictEqual(state.resourceUri.scheme, "jj");
     assert.strictEqual(uriParams(state.resourceUri).rev, "parent");
     assert.strictEqual(args[0].scheme, "jj");
@@ -395,10 +443,10 @@ suite("base comparison view", () => {
       | undefined;
     assert.ok(args);
 
-    assert.strictEqual(getBaseComparisonLabel(view), "Changes from @-- to @");
+    assert.strictEqual(getBaseComparisonLabel(view), "Base: @--");
     assert.strictEqual(
       getBaseComparisonLabel(view, "bad revset"),
-      "Changes from @-- to @ (error: bad revset)",
+      "Base: @-- (error: bad revset)",
     );
     assert.strictEqual(state.resourceUri.scheme, "jj");
     assert.strictEqual(uriParams(state.resourceUri).rev, "base-comparison");
