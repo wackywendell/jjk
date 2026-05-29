@@ -976,9 +976,11 @@ export class RepositorySourceControlManager {
     );
   }
 
-  async checkForUpdates() {
+  async checkForUpdates({ forceSnapshot = false } = {}) {
     if (!this.checkForUpdatesPromise) {
-      this.checkForUpdatesPromise = this.checkForUpdatesUnsafe();
+      this.checkForUpdatesPromise = this.checkForUpdatesUnsafe({
+        forceSnapshot,
+      });
       try {
         await this.checkForUpdatesPromise;
       } finally {
@@ -992,8 +994,10 @@ export class RepositorySourceControlManager {
   /**
    * This should never be called concurrently.
    */
-  async checkForUpdatesUnsafe() {
-    const latestOperationId = await this.repository.getLatestOperationId();
+  async checkForUpdatesUnsafe({ forceSnapshot = false } = {}) {
+    const latestOperationId = await this.repository.getLatestOperationId({
+      forceSnapshot,
+    });
     if (this.operationId !== latestOperationId) {
       this.operationId = latestOperationId;
       const status = await this.repository.status();
@@ -1687,12 +1691,12 @@ export class JJRepository {
    * Note: this command may itself snapshot the working copy and add an operation to the log, in which case it will
    * return the new operation id.
    */
-  async getLatestOperationId() {
+  async getLatestOperationId({ forceSnapshot = false } = {}) {
     await this.loadWatchmanRegisterSnapshotTriggerConfig();
     return (
       await handleJJCommand(
         this.spawnJJ([
-          ...this.getPollIgnoreWorkingCopyArgs(),
+          ...(forceSnapshot ? [] : this.getPollIgnoreWorkingCopyArgs()),
           "operation",
           "log",
           "--limit",

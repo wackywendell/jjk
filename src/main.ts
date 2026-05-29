@@ -1826,7 +1826,7 @@ export async function activate(context: vscode.ExtensionContext) {
     isInitialized = true;
   }
 
-  async function poll() {
+  async function poll({ forceSnapshot = false } = {}) {
     const didUpdate = await workspaceSCM.refresh();
     if (didUpdate) {
       setSelectedRepo(getSelectedRepo());
@@ -1842,7 +1842,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Snapshot changes
     await Promise.all(
-      workspaceSCM.repoSCMs.map((repoSCM) => repoSCM.checkForUpdates()),
+      workspaceSCM.repoSCMs.map((repoSCM) =>
+        repoSCM.checkForUpdates({ forceSnapshot }),
+      ),
     );
 
     updateScmGroupContextKeys();
@@ -1898,7 +1900,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "jj.refresh",
-      showLoading(() => poll()),
+      showLoading(() => poll({ forceSnapshot: true })),
     ),
   );
 
