@@ -2,7 +2,9 @@ import * as vscode from "vscode";
 import path from "path";
 import "./repository";
 import {
+  changeRev,
   displayChangeId,
+  formatChangeStatusBarText,
   getConfiguredChangesViewMode,
   initExtensionDir,
   provideOriginalResource,
@@ -338,6 +340,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const folderName = path.basename(repoSCM.repositoryRoot);
       const workingCopy = status.workingCopy;
+      const workingCopyRev = changeRev(workingCopy);
       const currentBookmarks = workingCopy.bookmarks ?? [];
 
       if (currentBookmarks.length > 0) {
@@ -346,10 +349,10 @@ export async function activate(context: vscode.ExtensionContext) {
             ? currentBookmarks[0]
             : `${currentBookmarks[0]} +${currentBookmarks.length - 1}`;
         bookmarkStatusBarItem.text = `$(bookmark) ${bookmarkLabel}`;
-        bookmarkStatusBarItem.tooltip = `${folderName} - Current bookmark: ${currentBookmarks.join(", ")}\nChange: ${workingCopy.changeId}\nCommit: ${workingCopy.commitId}\nClick for bookmark actions`;
+        bookmarkStatusBarItem.tooltip = `${folderName} - Current bookmark: ${currentBookmarks.join(", ")}\nChange: ${workingCopyRev}\nCommit: ${workingCopy.commitId}\nClick for bookmark actions`;
       } else {
-        bookmarkStatusBarItem.text = `$(git-commit) ${workingCopy.changeId}`;
-        bookmarkStatusBarItem.tooltip = `${folderName} - Current change: ${workingCopy.changeId}\nCommit: ${workingCopy.commitId}\nClick for bookmark actions`;
+        bookmarkStatusBarItem.text = formatChangeStatusBarText(workingCopy);
+        bookmarkStatusBarItem.tooltip = `${folderName} - Current change: ${workingCopyRev}\nCommit: ${workingCopy.commitId}\nClick for bookmark actions`;
       }
 
       bookmarkStatusBarItem.show();
@@ -874,7 +877,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
               await repository.squashRetryImmutable({
                 fromRev: "@",
-                toRev: destinationParentChange.changeId,
+                toRev: changeRev(destinationParentChange),
                 message,
                 filepaths: resourceStates.map(
                   (state) => state.resourceUri.fsPath,
@@ -906,7 +909,7 @@ export async function activate(context: vscode.ExtensionContext) {
               const status = await repository.status(true);
 
               const parentChange = status.parentChanges.find(
-                (change) => change.changeId === resourceGroup.id,
+                (change) => changeRev(change) === resourceGroup.id,
               );
               if (parentChange === undefined) {
                 throw new Error(
@@ -1037,7 +1040,7 @@ export async function activate(context: vscode.ExtensionContext) {
             try {
               await repository.squashRetryImmutable({
                 fromRev: "@",
-                toRev: destinationParentChange.changeId,
+                toRev: changeRev(destinationParentChange),
                 message,
               });
             } catch (error) {
@@ -1064,7 +1067,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const status = await repository.status(true);
 
             const parentChange = status.parentChanges.find(
-              (change) => change.changeId === resourceGroup.id,
+              (change) => changeRev(change) === resourceGroup.id,
             );
             if (parentChange === undefined) {
               throw new Error(
@@ -1490,7 +1493,7 @@ export async function activate(context: vscode.ExtensionContext) {
               label: `$(arrow-down) Parent: ${displayChangeId(parent)}`,
               description: parent.description || "(no description)",
               alwaysShow: true,
-              changeId: parent.changeId,
+              changeId: changeRev(parent),
             });
           }
 
@@ -1569,7 +1572,7 @@ export async function activate(context: vscode.ExtensionContext) {
               .case({ diffOriginalRev: "string" }, ({ diffOriginalRev }) =>
                 [
                   "@",
-                  status.workingCopy.changeId,
+                  changeRev(status.workingCopy),
                   status.workingCopy.commitId,
                 ].includes(diffOriginalRev),
               )

@@ -740,10 +740,29 @@ export function createParentSectionView(
   };
 }
 
-export function displayChangeId(
-  change: Pick<Change, "changeId" | "shortChangeId">,
-) {
-  return change.shortChangeId || change.changeId;
+export function makeChangeId({
+  full,
+  display,
+}: {
+  full: string;
+  display?: string;
+}): ChangeId {
+  return {
+    full,
+    display: display || full,
+  };
+}
+
+export function changeRev(change: Pick<Change, "changeId">) {
+  return change.changeId.full;
+}
+
+export function displayChangeId(change: Pick<Change, "changeId">) {
+  return change.changeId.display;
+}
+
+export function formatChangeStatusBarText(change: Pick<Change, "changeId">) {
+  return `$(git-commit) ${displayChangeId(change)}`;
 }
 
 export function formatChangeLabel(
@@ -892,7 +911,7 @@ export class RepositorySourceControlManager {
       return null;
     }
 
-    const parentChangeId = parents[0].changeId;
+    const parentChangeId = changeRev(parents[0]);
 
     if (showParentCommit) {
       // Target is parent's parent (@--). Get it from the show() result.
@@ -1049,8 +1068,9 @@ export class RepositorySourceControlManager {
     if (config.showParentCommit) {
       const parentShowPromises = status.parentChanges.map(
         async (parentChange) => {
-          const showResult = await this.repository.show(parentChange.changeId);
-          return { changeId: parentChange.changeId, showResult };
+          const changeId = changeRev(parentChange);
+          const showResult = await this.repository.show(changeId);
+          return { changeId, showResult };
         },
       );
 
@@ -1248,7 +1268,7 @@ export class RepositorySourceControlManager {
       this.parentResourceGroups.map((group) => group.id),
     );
     const needsParentGroupCreation = snapshot.status.parentChanges.some(
-      (change) => !existingParentIds.has(change.changeId),
+      (change) => !existingParentIds.has(changeRev(change)),
     );
 
     if (!needsParentGroupCreation) {
@@ -1287,7 +1307,7 @@ export class RepositorySourceControlManager {
   private renderParentGroups(snapshot: RepoSnapshot, config: RefreshConfig) {
     const validParentIds = new Set(
       config.showParentCommit
-        ? snapshot.status.parentChanges.map((c) => c.changeId)
+        ? snapshot.status.parentChanges.map(changeRev)
         : [],
     );
     this.parentResourceGroups = reconcileGroups(
@@ -1296,22 +1316,23 @@ export class RepositorySourceControlManager {
     );
 
     for (const parentChange of snapshot.status.parentChanges) {
-      if (!validParentIds.has(parentChange.changeId)) {
+      const parentRev = changeRev(parentChange);
+      if (!validParentIds.has(parentRev)) {
         continue;
       }
 
       let group = this.parentResourceGroups.find(
-        (g) => g.id === parentChange.changeId,
+        (g) => g.id === parentRev,
       );
       if (!group) {
         group = this.sourceControl.createResourceGroup(
-          parentChange.changeId,
+          parentRev,
           "",
         );
         this.parentResourceGroups.push(group);
       }
 
-      const result = snapshot.parentSectionResults.get(parentChange.changeId);
+      const result = snapshot.parentSectionResults.get(parentRev);
       if (!result) {
         group.label = formatChangeLabel(
           config.changesViewMode === "cumulative" ? "Parent+" : "Parent",
@@ -1738,8 +1759,8 @@ export class JJRepository {
   private async hydratePreciseChangeIds(status: RepositoryStatus) {
     const changes = [status.workingCopy, ...status.parentChanges].filter(
       (change) =>
-        change.changeId &&
-        (!change.shortChangeId || change.shortChangeId === change.changeId),
+        change.changeId.full &&
+        change.changeId.display === change.changeId.full,
     );
     if (changes.length === 0) {
       return;
@@ -1747,15 +1768,17 @@ export class JJRepository {
 
     try {
       const resolved = await this.resolveChangeIds(
-        changes.map((change) => change.changeId),
+        changes.map(changeRev),
       );
       for (const change of changes) {
         const match = resolved.find(({ changeId }) =>
-          changeId.startsWith(change.changeId),
+          changeId.startsWith(change.changeId.full),
         );
         if (match) {
-          change.changeId = match.changeId;
-          change.shortChangeId = match.shortChangeId;
+          change.changeId = makeChangeId({
+            full: match.changeId,
+            display: match.shortChangeId,
+          });
         }
       }
     } catch (error) {
@@ -1974,8 +1997,7 @@ export class JJRepository {
     }
     const ret: Show = {
       change: {
-        changeId: "",
-        shortChangeId: "",
+        changeId: makeChangeId({ full: "" }),
         commitId: "",
         parentChangeIds: [],
         parentCommitIds: [],
@@ -1997,10 +2019,16 @@ export class JJRepository {
       const value = field.trim();
       switch (rt.fields[i].name) {
         case "changeId":
-          ret.change.changeId = value;
+          ret.change.changeId = makeChangeId({
+            full: value,
+            display: ret.change.changeId.display,
+          });
           break;
         case "shortChangeId":
-          ret.change.shortChangeId = value;
+          ret.change.changeId = makeChangeId({
+            full: ret.change.changeId.full,
+            display: value,
+          });
           break;
         case "commitId":
           ret.change.commitId = value;
@@ -3016,14 +3044,18 @@ export type FileStatus = {
 };
 
 export interface Change {
-  changeId: string;
-  shortChangeId: string;
+  changeId: ChangeId;
   commitId: string;
   bookmarks?: string[];
   description: string;
   isEmpty: boolean;
   isConflict: boolean;
 }
+
+export type ChangeId = {
+  full: string;
+  display: string;
+};
 
 export interface ChangeWithDetails extends Change {
   author: {
@@ -3109,8 +3141,7 @@ async function parseJJStatus(
   const fileStatuses: FileStatus[] = [];
   const conflictedFiles = new Set<string>();
   let workingCopy: Change = {
-    changeId: "",
-    shortChangeId: "",
+    changeId: makeChangeId({ full: "" }),
     commitId: "",
     description: "",
     isEmpty: false,
@@ -3211,8 +3242,7 @@ async function parseJJStatus(
 
       const parsedChangeId = await stripAnsiCodes(changeId);
       const commitDetails: Change = {
-        changeId: parsedChangeId,
-        shortChangeId: parsedChangeId,
+        changeId: makeChangeId({ full: parsedChangeId }),
         commitId: await stripAnsiCodes(commitId),
         bookmarks: bookmarks
           ? (await stripAnsiCodes(bookmarks)).split(/\s+/)

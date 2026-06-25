@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
-import type { JJRepository } from "./repository";
+import { changeRev, type JJRepository } from "./repository";
 import path from "path";
 
 type Message = {
@@ -240,7 +240,7 @@ export class JJGraphWebview implements vscode.WebviewViewProvider {
     changes = await this.getChangeNodesWithParents(changes);
 
     const status = await this.repository.getStatus(true);
-    const workingCopyId = status.workingCopy.changeId;
+    const workingCopyId = changeRev(status.workingCopy);
 
     this.selectedNodes.clear();
     this.contextChange = undefined;

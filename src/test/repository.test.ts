@@ -198,18 +198,20 @@ suite("getBaseComparisonTarget", () => {
     parentShowResults: Map<string, Show>,
     showParentCommit: boolean,
   ) => string | null;
+  let changeRev: typeof import("../repository").changeRev;
+  let makeChangeId: typeof import("../repository").makeChangeId;
 
   suiteSetup(async () => {
     const api = await getExtensionAPI();
     const cls = api.repository.RepositorySourceControlManager;
     getBaseComparisonTarget = (status, parentShowResults, showParentCommit) =>
       cls.getBaseComparisonTarget(status, parentShowResults, showParentCommit);
+    ({ changeRev, makeChangeId } = api.repository);
   });
 
   function makeChange(changeId: string): RepositoryStatus["parentChanges"][0] {
     return {
-      changeId,
-      shortChangeId: changeId.slice(0, 3),
+      changeId: makeChangeId({ full: changeId, display: changeId.slice(0, 3) }),
       commitId: `commit-${changeId}`,
       description: "",
       isEmpty: false,
@@ -247,17 +249,17 @@ suite("getBaseComparisonTarget", () => {
     const grandparent = makeChange("grandparent");
     const parent = makeChange("parent");
     const child = makeChange("child");
-    const status = makeStatus(child.changeId, [parent.changeId]);
+    const status = makeStatus(changeRev(child), [changeRev(parent)]);
 
-    const parentShow = makeShow(parent.changeId, [grandparent.changeId]);
+    const parentShow = makeShow(changeRev(parent), [changeRev(grandparent)]);
     const parentShowResults = new Map<string, Show>([
-      [parent.changeId, parentShow],
+      [changeRev(parent), parentShow],
     ]);
 
     let shown = getBaseComparisonTarget(status, parentShowResults, true);
-    assert.strictEqual(grandparent.changeId, shown);
+    assert.strictEqual(changeRev(grandparent), shown);
     shown = getBaseComparisonTarget(status, parentShowResults, false);
-    assert.strictEqual(parent.changeId, shown);
+    assert.strictEqual(changeRev(parent), shown);
   });
 
   test("multiple parents, no base comparison", () => {
@@ -266,16 +268,16 @@ suite("getBaseComparisonTarget", () => {
     const grandparent2 = makeChange("grandparent2");
     const parent2 = makeChange("parent2");
     const child = makeChange("child");
-    const status = makeStatus(child.changeId, [
-      parent1.changeId,
-      parent2.changeId,
+    const status = makeStatus(changeRev(child), [
+      changeRev(parent1),
+      changeRev(parent2),
     ]);
 
-    const parent1Show = makeShow(parent1.changeId, [grandparent1.changeId]);
-    const parent2Show = makeShow(parent2.changeId, [grandparent2.changeId]);
+    const parent1Show = makeShow(changeRev(parent1), [changeRev(grandparent1)]);
+    const parent2Show = makeShow(changeRev(parent2), [changeRev(grandparent2)]);
     const parentShowResults = new Map<string, Show>([
-      [parent1.changeId, parent1Show],
-      [parent2.changeId, parent2Show],
+      [changeRev(parent1), parent1Show],
+      [changeRev(parent2), parent2Show],
     ]);
 
     let shown = getBaseComparisonTarget(status, parentShowResults, true);
@@ -289,14 +291,14 @@ suite("getBaseComparisonTarget", () => {
     const grandparent2 = makeChange("grandparent2");
     const parent = makeChange("parent");
     const child = makeChange("child");
-    const status = makeStatus(child.changeId, [parent.changeId]);
+    const status = makeStatus(changeRev(child), [changeRev(parent)]);
 
-    const parentShow = makeShow(parent.changeId, [
-      grandparent1.changeId,
-      grandparent2.changeId,
+    const parentShow = makeShow(changeRev(parent), [
+      changeRev(grandparent1),
+      changeRev(grandparent2),
     ]);
     const parentShowResults = new Map<string, Show>([
-      [parent.changeId, parentShow],
+      [changeRev(parent), parentShow],
     ]);
 
     // If we're showing the parent, then base target is unclear - there are two
@@ -306,7 +308,7 @@ suite("getBaseComparisonTarget", () => {
 
     // If we're not showing the parent, then base target is clear - its parent
     shown = getBaseComparisonTarget(status, parentShowResults, false);
-    assert.strictEqual(parent.changeId, shown);
+    assert.strictEqual(changeRev(parent), shown);
   });
 
   test("missing show result", () => {
@@ -341,17 +343,23 @@ suite("parseChangesViewMode", () => {
 
 suite("change labels", () => {
   let displayChangeId: typeof import("../repository").displayChangeId;
+  let formatChangeStatusBarText: typeof import("../repository").formatChangeStatusBarText;
   let formatChangeLabel: typeof import("../repository").formatChangeLabel;
+  let makeChangeId: typeof import("../repository").makeChangeId;
 
   suiteSetup(async () => {
-    ({ displayChangeId, formatChangeLabel } = (await getExtensionAPI()).repository);
+    ({ displayChangeId, formatChangeStatusBarText, formatChangeLabel, makeChangeId } = (
+      await getExtensionAPI()
+    ).repository);
   });
 
   test("uses section name, shortest precise change id, and description", () => {
     assert.strictEqual(
       formatChangeLabel("Parent+", {
-        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
-        shortChangeId: "rs",
+        changeId: makeChangeId({
+          full: "npluquvnpkpprpozulnmossnkonzqskp",
+          display: "rs",
+        }),
         commitId: "commit",
         description: "describe labels",
         isEmpty: false,
@@ -364,18 +372,44 @@ suite("change labels", () => {
   test("formats change ids for display with the shortest precise id", () => {
     assert.strictEqual(
       displayChangeId({
-        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
-        shortChangeId: "rs",
+        changeId: makeChangeId({
+          full: "npluquvnpkpprpozulnmossnkonzqskp",
+          display: "rs",
+        }),
       }),
       "rs",
+    );
+  });
+
+  test("keeps the full rev separate from the display id", () => {
+    const changeId = makeChangeId({
+      full: "npluquvnpkpprpozulnmossnkonzqskp",
+      display: "rs",
+    });
+
+    assert.strictEqual(changeId.full, "npluquvnpkpprpozulnmossnkonzqskp");
+    assert.strictEqual(changeId.display, "rs");
+  });
+
+  test("formats status bar text with the display id", () => {
+    assert.strictEqual(
+      formatChangeStatusBarText({
+        changeId: makeChangeId({
+          full: "npluquvnpkpprpozulnmossnkonzqskp",
+          display: "rs",
+        }),
+      }),
+      "$(git-commit) rs",
     );
   });
 
   test("shows status flags after the description", () => {
     assert.strictEqual(
       formatChangeLabel("Working Copy", {
-        changeId: "npluquvnpkpprpozulnmossnkonzqskp",
-        shortChangeId: "npl",
+        changeId: makeChangeId({
+          full: "npluquvnpkpprpozulnmossnkonzqskp",
+          display: "npl",
+        }),
         commitId: "commit",
         description: "",
         isEmpty: true,
